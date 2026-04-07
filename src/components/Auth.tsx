@@ -15,7 +15,7 @@ import { cn } from '../lib/utils';
 
 type AuthMode = 'signin' | 'signup' | 'forgot' | 'reset';
 
-export default function Auth() {
+export default function Auth({ theme = 'light' }: { theme?: string }) {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -121,18 +121,30 @@ export default function Auth() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f3f7ff] dark:bg-slate-950 flex items-center justify-center p-3 font-sans">
+    <div className={cn(
+      "min-h-screen flex items-center justify-center p-3 font-sans transition-colors duration-300",
+      theme === 'dark' ? "bg-black" : "bg-[#f3f7ff]"
+    )}>
       <motion.div 
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-[300px] bg-white dark:bg-slate-900 rounded-[20px] p-4 sm:p-7 shadow-[0_10px_40px_rgba(0,0,0,0.04)] dark:shadow-none border border-white/50 dark:border-slate-800"
+        className={cn(
+          "w-full max-w-[300px] rounded-[20px] p-4 sm:p-7 shadow-[0_10px_40px_rgba(0,0,0,0.04)] border transition-colors duration-300",
+          theme === 'dark' ? "bg-zinc-950 border-zinc-800 shadow-none" : "bg-white border-white/50"
+        )}
       >
         <div className="text-center mb-4">
           <div className="flex items-center justify-center gap-1.5 mb-1 font-outfit">
             <span className="text-[24px] font-black text-[#3b82f6] dark:text-blue-400 tracking-tight">AI</span>
-            <span className="text-[24px] font-black text-[#1e293b] dark:text-white tracking-tight">Cashbook</span>
+            <span className={cn(
+              "text-[24px] font-black tracking-tight transition-colors duration-300",
+              theme === 'dark' ? "text-slate-100" : "text-slate-800"
+            )}>Cashbook</span>
           </div>
-          <p className="text-[#94a3b8] dark:text-slate-400 text-[9px] font-medium mt-1 leading-relaxed">
+          <p className={cn(
+            "text-[9px] font-medium mt-1 leading-relaxed transition-colors duration-300",
+            theme === 'dark' ? "text-slate-400" : "text-black"
+          )}>
             {mode === 'signin' ? 'Welcome back! Please login to continue.' : 
              mode === 'signup' ? 'Join us to start tracking your expenses.' : 
              mode === 'reset' ? 'Set a strong new password for your account.' :
@@ -175,28 +187,40 @@ export default function Auth() {
           >
             {mode === 'signup' && (
               <div className="space-y-1 mb-3">
-                <label className="text-[10px] font-bold text-[#475569] dark:text-slate-300 ml-1">Full Name</label>
+                <label className={cn(
+                  "text-[10px] font-bold ml-1 transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-300" : "text-black"
+                )}>Full Name</label>
                 <input
                   type="text"
                   required
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="Enter your full name"
-                  className="w-full bg-white dark:bg-slate-800 border border-[#e2e8f0] dark:border-slate-700 focus:border-[#3b82f6] dark:focus:border-blue-500 rounded-lg py-2 px-3.5 outline-none transition-all text-[#1e293b] dark:text-white text-xs font-medium placeholder:text-[#cbd5e1]"
+                  className={cn(
+                    "w-full border focus:border-[#3b82f6] rounded-lg py-2 px-3.5 outline-none transition-all text-xs font-medium placeholder:text-[#cbd5e1]",
+                    theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-slate-100" : "bg-white border-[#e2e8f0] text-slate-800"
+                  )}
                 />
               </div>
             )}
 
             {(mode === 'signin' || mode === 'signup' || mode === 'forgot') && (
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-[#475569] dark:text-slate-300 ml-1">Email</label>
+                <label className={cn(
+                  "text-[10px] font-bold ml-1 transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-300" : "text-black"
+                )}>Email</label>
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="Enter your email"
-                  className="w-full bg-white dark:bg-slate-800 border border-[#e2e8f0] dark:border-slate-700 focus:border-[#3b82f6] dark:focus:border-blue-500 rounded-lg py-2 px-3.5 outline-none transition-all text-[#1e293b] dark:text-white text-xs font-medium placeholder:text-[#cbd5e1]"
+                  className={cn(
+                    "w-full border focus:border-[#3b82f6] rounded-lg py-2 px-3.5 outline-none transition-all text-xs font-medium placeholder:text-[#cbd5e1]",
+                    theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-slate-100" : "bg-white border-[#e2e8f0] text-slate-800"
+                  )}
                 />
               </div>
             )}
@@ -210,7 +234,10 @@ export default function Auth() {
               className="space-y-3"
             >
               <div className="space-y-1">
-                <label className="text-[10px] font-bold text-[#475569] dark:text-slate-300 ml-1">
+                <label className={cn(
+                  "text-[10px] font-bold ml-1 transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-300" : "text-black"
+                )}>
                   {mode === 'reset' ? 'New Password' : 'Password'}
                 </label>
                 <div className="relative">
@@ -220,7 +247,10 @@ export default function Auth() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={mode === 'reset' ? "Enter new password" : "Enter your password"}
-                    className="w-full bg-white dark:bg-slate-800 border border-[#e2e8f0] dark:border-slate-700 focus:border-[#3b82f6] dark:focus:border-blue-500 rounded-lg py-2 px-3.5 outline-none transition-all text-[#1e293b] dark:text-white text-xs font-medium placeholder:text-[#cbd5e1] pr-9"
+                    className={cn(
+                      "w-full border focus:border-[#3b82f6] rounded-lg py-2 px-3.5 outline-none transition-all text-xs font-medium placeholder:text-[#cbd5e1] pr-9",
+                      theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-slate-100" : "bg-white border-[#e2e8f0] text-slate-800"
+                    )}
                   />
                   <button
                     type="button"
@@ -238,13 +268,19 @@ export default function Auth() {
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
                       exit={{ opacity: 0, height: 0 }}
-                      className="mt-2 p-2 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-800 overflow-hidden"
+                      className={cn(
+                        "mt-2 p-2 rounded-lg border overflow-hidden",
+                        theme === 'dark' ? "bg-zinc-900/50 border-zinc-800" : "bg-slate-50 border-slate-100"
+                      )}
                     >
-                      <p className="text-[9px] font-bold text-slate-500 dark:text-slate-400 mb-1.5 flex items-center gap-1">
+                      <p className={cn(
+                        "text-[9px] font-bold mb-1.5 flex items-center gap-1",
+                        theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                      )}>
                         {isPasswordStrong ? (
-                          <ShieldCheck size={10} className="text-emerald-500" />
+                          <CheckCircle2 size={10} className="text-emerald-500" />
                         ) : (
-                          <ShieldAlert size={10} className="text-amber-500" />
+                          <AlertCircle size={10} className="text-amber-500" />
                         )}
                         Security Requirements
                       </p>
@@ -253,11 +289,11 @@ export default function Auth() {
                           <div key={req.key} className="flex items-center gap-1.5">
                             <div className={cn(
                               "w-1 h-1 rounded-full",
-                              req.met ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-600"
+                              req.met ? "bg-emerald-500" : (theme === 'dark' ? "bg-zinc-700" : "bg-slate-300")
                             )} />
                             <span className={cn(
                               "text-[8px] font-medium",
-                              req.met ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"
+                              req.met ? (theme === 'dark' ? "text-emerald-400" : "text-emerald-600") : (theme === 'dark' ? "text-slate-500" : "text-slate-400")
                             )}>
                               {req.label}
                             </span>
@@ -275,17 +311,23 @@ export default function Auth() {
               </div>
 
               {(mode === 'signup' || mode === 'reset') && (
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-[#475569] dark:text-slate-300 ml-1">Confirm Password</label>
-                  <div className="relative">
-                    <input
-                      type={showConfirmPassword ? "text" : "password"}
-                      required
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="Confirm your password"
-                      className="w-full bg-white dark:bg-slate-800 border border-[#e2e8f0] dark:border-slate-700 focus:border-[#3b82f6] dark:focus:border-blue-500 rounded-lg py-2 px-3.5 outline-none transition-all text-[#1e293b] dark:text-white text-xs font-medium placeholder:text-[#cbd5e1] pr-9"
-                    />
+              <div className="space-y-1">
+                <label className={cn(
+                  "text-[10px] font-bold ml-1 transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-300" : "text-black"
+                )}>Confirm Password</label>
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm your password"
+                    className={cn(
+                      "w-full border focus:border-[#3b82f6] rounded-lg py-2 px-3.5 outline-none transition-all text-xs font-medium placeholder:text-[#cbd5e1] pr-9",
+                      theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-slate-100" : "bg-white border-[#e2e8f0] text-slate-800"
+                    )}
+                  />
                     <button
                       type="button"
                       onClick={() => setShowConfirmPassword(!showConfirmPassword)}
@@ -332,7 +374,10 @@ export default function Auth() {
           )}
 
           {mode === 'signin' ? (
-            <p className="text-[#64748b] dark:text-slate-400 font-medium text-[11px]">
+            <p className={cn(
+              "font-medium text-[11px] transition-colors duration-300",
+              theme === 'dark' ? "text-slate-400" : "text-black"
+            )}>
               Don't have an account?{' '}
               <button 
                 onClick={() => setMode('signup')}
@@ -343,7 +388,10 @@ export default function Auth() {
             </p>
           ) : (
             <div className="space-y-2.5">
-              <p className="text-[#64748b] dark:text-slate-400 font-medium text-[11px]">
+              <p className={cn(
+                "font-medium text-[11px] transition-colors duration-300",
+                theme === 'dark' ? "text-slate-400" : "text-black"
+              )}>
                 Already have an account?{' '}
                 <button 
                   onClick={() => setMode('signin')}
@@ -355,7 +403,10 @@ export default function Auth() {
               {(mode === 'forgot' || mode === 'reset') && (
                 <button 
                   onClick={() => setMode('signin')}
-                  className="flex items-center gap-1 text-[#64748b] dark:text-slate-400 font-bold hover:text-[#3b82f6] transition-colors mx-auto text-[11px]"
+                  className={cn(
+                    "flex items-center gap-1 font-bold hover:text-[#3b82f6] transition-colors mx-auto text-[11px]",
+                    theme === 'dark' ? "text-slate-400" : "text-black"
+                  )}
                 >
                   <ArrowLeft size={12} />
                   Back to Login
