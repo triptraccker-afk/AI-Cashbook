@@ -9,7 +9,8 @@ import {
   CheckCircle2,
   ArrowLeft,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  LogOut
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -45,6 +46,28 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
     }
   }, []);
 
+  const [testingConnection, setTestingConnection] = useState(false);
+
+  const testConnection = async () => {
+    if (!supabase) {
+      setError('Supabase is not configured.');
+      return;
+    }
+    setTestingConnection(true);
+    setError(null);
+    try {
+      const { error } = await supabase.from('books').select('id').limit(1);
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned" which is fine
+        throw error;
+      }
+      setSuccess('Connection to Supabase successful!');
+    } catch (err: any) {
+      setError(`Connection failed: ${err.message}`);
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
   const getPasswordRequirements = (pass: string) => {
     return [
       { label: '6+ characters', met: pass.length >= 6, key: 'length' },
@@ -60,7 +83,10 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase) return;
+    if (!supabase) {
+      setError('Supabase is not configured. Please check your environment variables (VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).');
+      return;
+    }
     
     if (mode === 'signup' || mode === 'reset') {
       if (!isPasswordStrong) {
@@ -114,7 +140,13 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
         setTimeout(() => setMode('signin'), 2000);
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred during authentication.');
+      if (err.message?.includes('Email not confirmed')) {
+        setError('Email not confirmed. Please check your inbox or spam folder for the verification link.');
+      } else if (err.message?.includes('Invalid login credentials')) {
+        setError('Invalid email or password. Please try again.');
+      } else {
+        setError(err.message || 'An error occurred during authentication.');
+      }
     } finally {
       setLoading(false);
     }
@@ -178,7 +210,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
               </motion.div>
             )}
           </AnimatePresence>
-
+          
           <motion.div 
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
@@ -349,7 +381,12 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
             whileTap={{ scale: 0.98 }}
             type="submit"
             disabled={loading}
-            className="w-full bg-[#eff6ff] hover:bg-[#e0edff] text-[#3b82f6] rounded-lg py-2.5 font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed mt-2 text-sm border border-[#dbeafe]"
+            className={cn(
+              "w-full rounded-lg py-2.5 font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed mt-2 text-sm border cursor-pointer",
+              theme === 'dark' 
+                ? "bg-blue-900/20 hover:bg-blue-900/30 text-blue-400 border-blue-900/50" 
+                : "bg-[#eff6ff] hover:bg-[#e0edff] text-[#3b82f6] border-[#dbeafe]"
+            )}
           >
             {loading ? (
               <Loader2 className="animate-spin" size={18} />
@@ -367,25 +404,27 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
             <button 
               type="button"
               onClick={() => setMode('forgot')}
-              className="block w-full text-[#3b82f6] font-bold hover:underline text-[11px]"
+              className="block w-full text-[#3b82f6] font-bold hover:underline text-[11px] cursor-pointer"
             >
               Forgot password?
             </button>
           )}
 
           {mode === 'signin' ? (
-            <p className={cn(
-              "font-medium text-[11px] transition-colors duration-300",
-              theme === 'dark' ? "text-slate-400" : "text-black"
-            )}>
-              Don't have an account?{' '}
-              <button 
-                onClick={() => setMode('signup')}
-                className="text-[#3b82f6] font-bold hover:underline"
-              >
-                Sign up
-              </button>
-            </p>
+            <div className="space-y-2">
+              <p className={cn(
+                "font-medium text-[11px] transition-colors duration-300",
+                theme === 'dark' ? "text-slate-400" : "text-black"
+              )}>
+                Don't have an account?{' '}
+                <button 
+                  onClick={() => setMode('signup')}
+                  className="text-[#3b82f6] font-bold hover:underline cursor-pointer"
+                >
+                  Sign up
+                </button>
+              </p>
+            </div>
           ) : (
             <div className="space-y-2.5">
               <p className={cn(
@@ -395,7 +434,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
                 Already have an account?{' '}
                 <button 
                   onClick={() => setMode('signin')}
-                  className="text-[#3b82f6] font-bold hover:underline"
+                  className="text-[#3b82f6] font-bold hover:underline cursor-pointer"
                 >
                   Login
                 </button>
