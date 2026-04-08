@@ -28,6 +28,7 @@ import {
   ZoomOut,
   Check,
   CheckSquare,
+  Sparkles,
   Square,
   Trash,
   ChevronDown,
@@ -43,13 +44,16 @@ import {
   FileSpreadsheet,
   AlertCircle,
   HelpCircle,
-  MessageSquare
+  MessageSquare,
+  Sun,
+  Moon,
+  Palette
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { cn, formatCurrency } from './lib/utils';
-import { parseReceipt } from './services/gemini';
+import { parseReceipt, getApiKey } from './services/gemini';
 import { supabase } from './lib/supabase';
 import Auth from './components/Auth';
 import * as XLSX from 'xlsx';
@@ -66,6 +70,7 @@ interface Transaction {
   mode: string;
   date: Date;
   images?: string[];
+  isAi?: boolean;
 }
 
 interface Cashbook {
@@ -95,7 +100,11 @@ export default function App() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [isCreatingBook, setIsCreatingBook] = useState(false);
   const [isEditingBook, setIsEditingBook] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingMessage, setSubmittingMessage] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [showBulkTransactionDeleteConfirm, setShowBulkTransactionDeleteConfirm] = useState(false);
   const [transactionToDelete, setTransactionToDelete] = useState<string | null>(null);
   const [newBookName, setNewBookName] = useState('');
   const [editBookName, setEditBookName] = useState('');
@@ -111,7 +120,18 @@ export default function App() {
   const [transactionCategoryFilter, setTransactionCategoryFilter] = useState('All');
   const [showReportsMenu, setShowReportsMenu] = useState(false);
   const [selectedTransactions, setSelectedTransactions] = useState<Set<string>>(new Set());
+  const [selectedBooks, setSelectedBooks] = useState<Set<string>>(new Set());
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    return 'light';
+  });
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const bookLongPressTimer = useRef<NodeJS.Timeout | null>(null);
 
   const handleTransactionPress = (id: string) => {
     if (selectedTransactions.size > 0) {
@@ -140,6 +160,93 @@ export default function App() {
       clearTimeout(longPressTimer.current);
     }
   };
+
+  const toggleSelectBook = (id: string) => {
+    const newSelected = new Set(selectedBooks);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedBooks(newSelected);
+  };
+
+  const handleBookPress = (id: string) => {
+    if (selectedBooks.size > 0) {
+      toggleSelectBook(id);
+    } else {
+      setActiveBookId(id);
+    }
+  };
+
+  const handleBookLongPress = (id: string) => {
+    if (selectedBooks.size === 0) {
+      toggleSelectBook(id);
+      if (window.navigator.vibrate) {
+        window.navigator.vibrate(50);
+      }
+    }
+  };
+
+  const onTouchStartBook = (id: string) => {
+    bookLongPressTimer.current = setTimeout(() => {
+      handleBookLongPress(id);
+    }, 500);
+  };
+
+  const onTouchEndBook = () => {
+    if (bookLongPressTimer.current) {
+      clearTimeout(bookLongPressTimer.current);
+    }
+  };
+
+  // Theme handling
+  useEffect(() => {
+    const root = window.document.documentElement;
+    const body = window.document.body;
+    
+    // Remove both to be sure
+    root.classList.remove('light', 'dark');
+    body.classList.remove('light', 'dark');
+    
+    // Add the current theme
+    root.classList.add(theme);
+    body.classList.add(theme);
+    
+    // Set color scheme for system UI
+    root.style.colorScheme = theme;
+    
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  };
+
+  // Back button handling for mobile
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (activeBookId) {
+        setActiveBookId(null);
+        // Prevent default back behavior
+        window.history.pushState(null, '', window.location.pathname);
+      } else {
+        setShowExitConfirm(true);
+        // Prevent default back behavior
+        window.history.pushState(null, '', window.location.pathname);
+      }
+    };
+
+    // Push initial state
+    window.history.pushState(null, '', window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [activeBookId]);
+
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [previewImages, setPreviewImages] = useState<string[] | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -198,7 +305,14 @@ export default function App() {
   useEffect(() => {
     if (!supabase) return;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error) {
+        console.error('Session initialization error:', error);
+        // If we have a refresh token error, sign out to clear stale state
+        if (error.message?.includes('Refresh Token Not Found') || error.message?.includes('invalid_refresh_token')) {
+          supabase.auth.signOut();
+        }
+      }
       setSession(session);
       if (session?.user?.user_metadata?.full_name) {
         setUserName(session.user.user_metadata.full_name);
@@ -207,10 +321,15 @@ export default function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session?.user?.user_metadata?.full_name) {
-        setUserName(session.user.user_metadata.full_name);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setBooks([]);
+      } else {
+        setSession(session);
+        if (session?.user?.user_metadata?.full_name) {
+          setUserName(session.user.user_metadata.full_name);
+        }
       }
     });
 
@@ -267,7 +386,8 @@ export default function App() {
               return {
                 ...t,
                 date: t.date ? new Date(t.date) : new Date(),
-                images: [...manualImgs, ...aiImgs]
+                images: [...manualImgs, ...aiImgs],
+                isAi: aiImgs.length > 0
               };
             }).sort((a: any, b: any) => b.date.getTime() - a.date.getTime()),
             createdAt: cb.created_at ? new Date(cb.created_at) : (cb.createdAt ? new Date(cb.createdAt) : new Date())
@@ -378,6 +498,12 @@ export default function App() {
   const handleCreateBook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBookName.trim() || !session) return;
+    
+    // Optimization: Don't show submitting overlay for simple book creation if it's too slow
+    // Or just make it very quick.
+    setIsSubmitting(true);
+    setSubmittingMessage('Creating new book...');
+    
     const newBook: Cashbook = {
       id: safeUUID(),
       name: newBookName,
@@ -385,6 +511,13 @@ export default function App() {
       createdAt: new Date()
     };
 
+    // Update local state immediately for perceived speed
+    setBooks(prev => [...prev, newBook]);
+    setNewBookName('');
+    setIsCreatingBook(false);
+    setIsSubmitting(false);
+
+    // Then handle Supabase in background
     if (supabase) {
       try {
         const { error } = await supabase
@@ -398,12 +531,9 @@ export default function App() {
         if (error) throw error;
       } catch (error) {
         console.error('Error creating book in Supabase:', error);
+        // If it fails, we might want to revert local state, but usually it's fine
       }
     }
-
-    setBooks([...books, newBook]);
-    setNewBookName('');
-    setIsCreatingBook(false);
   };
 
   const handleUpdateBook = async (e: React.FormEvent) => {
@@ -434,7 +564,7 @@ export default function App() {
     setHelpResponse('');
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const ai = new GoogleGenAI({ apiKey: getApiKey() });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: helpQuery,
@@ -478,6 +608,27 @@ export default function App() {
     }
   };
 
+  const handleBulkDeleteBooks = async () => {
+    if (selectedBooks.size === 0 || !session) return;
+    
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('cashbooks')
+          .delete()
+          .in('id', Array.from(selectedBooks))
+          .eq('user_id', session.user.id);
+        if (error) throw error;
+      } catch (error) {
+        console.error('Error bulk deleting books from Supabase:', error);
+      }
+    }
+
+    setBooks(books.filter(b => !selectedBooks.has(b.id)));
+    setSelectedBooks(new Set());
+    setShowBulkDeleteConfirm(false);
+  };
+
   const handleAddTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeBookId || !showForm || !amount || !session) return;
@@ -488,63 +639,67 @@ export default function App() {
     const dateObj = new Date(transactionDate);
 
     if (editingTransaction) {
-      if (supabase) {
-        try {
-          const { error } = await supabase
-            .from('entries')
-            .update({
-              amount: amountNum,
-              type: showForm,
-              description: description,
-              category: finalCategory || 'General',
-              mode: finalMode,
-              date: safeToISOString(dateObj)
-            })
-            .eq('id', editingTransaction.id)
-            .eq('user_id', session.user.id);
-          if (error) throw error;
+      // Optimistic update for editing
+      const updatedTransaction: Transaction = {
+        ...editingTransaction,
+        amount: amountNum,
+        type: showForm,
+        description: description,
+        category: finalCategory || 'General',
+        mode: finalMode,
+        date: dateObj,
+        images: selectedImages.length > 0 ? selectedImages : editingTransaction.images
+      };
 
-          // Handle attachments update
-          if (selectedImages.length > 0) {
-            // Delete old manual attachments
-            await supabase.from('attachments').delete().eq('entry_id', editingTransaction.id);
-            // Insert new ones
-            const attachmentInserts = selectedImages.map(url => ({
-              entry_id: editingTransaction.id,
-              user_id: session.user.id,
-              file_url: url,
-              file_name: 'manual_upload',
-              file_type: 'image'
-            }));
-            await supabase.from('attachments').insert(attachmentInserts);
-          }
-        } catch (error) {
-          console.error('Error updating entry in Supabase:', error);
-        }
-      }
-
-      // Update existing transaction
       setBooks(books.map(b => 
         b.id === activeBookId 
           ? { 
               ...b, 
-              transactions: b.transactions.map(t => 
-                t.id === editingTransaction.id 
-                  ? {
-                      ...t,
-                      amount: amountNum,
-                      type: showForm,
-                      description: description,
-                      category: finalCategory || 'General',
-                      mode: finalMode,
-                      date: dateObj,
-                      images: selectedImages.length > 0 ? selectedImages : undefined
-                    }
-                  : t
-              )
+              transactions: b.transactions.map(t => t.id === editingTransaction.id ? updatedTransaction : t)
             }
           : b
       ));
+
+      // Close form immediately for speed
+      setShowForm(null);
+      setEditingTransaction(null);
+      setIsSubmitting(false);
+
+      if (supabase) {
+        // Run database update in background
+        (async () => {
+          try {
+            const { error } = await supabase
+              .from('entries')
+              .update({
+                amount: amountNum,
+                type: showForm,
+                description: description,
+                category: finalCategory || 'General',
+                mode: finalMode,
+                date: safeToISOString(dateObj)
+              })
+              .eq('id', editingTransaction.id)
+              .eq('user_id', session.user.id);
+            if (error) throw error;
+
+            if (selectedImages.length > 0) {
+              await supabase.from('attachments').delete().eq('entry_id', editingTransaction.id);
+              const attachmentInserts = selectedImages.map(url => ({
+                entry_id: editingTransaction.id,
+                user_id: session.user.id,
+                file_url: url,
+                file_name: 'manual_upload',
+                file_type: 'image'
+              }));
+              await supabase.from('attachments').insert(attachmentInserts);
+            }
+          } catch (error) {
+            console.error('Error updating entry in Supabase:', error);
+            setError('Failed to sync update with server. Please check your connection.');
+          }
+        })();
+      }
     } else {
       // Add new transaction
       const newTransaction: Transaction = {
@@ -558,44 +713,58 @@ export default function App() {
         images: selectedImages.length > 0 ? selectedImages : undefined
       };
 
-      if (supabase) {
-        try {
-          const { error } = await supabase
-            .from('entries')
-            .insert([{
-              id: newTransaction.id,
-              cashbook_id: activeBookId,
-              user_id: session.user.id,
-              amount: newTransaction.amount,
-              type: newTransaction.type,
-              description: newTransaction.description,
-              category: newTransaction.category,
-              mode: newTransaction.mode,
-              date: safeToISOString(newTransaction.date)
-            }]);
-          if (error) throw error;
-
-          // Handle attachments
-          if (newTransaction.images && newTransaction.images.length > 0) {
-            const attachmentInserts = newTransaction.images.map(url => ({
-              entry_id: newTransaction.id,
-              user_id: session.user.id,
-              file_url: url,
-              file_name: 'manual_upload',
-              file_type: 'image'
-            }));
-            await supabase.from('attachments').insert(attachmentInserts);
-          }
-        } catch (error) {
-          console.error('Error creating entry in Supabase:', error);
-        }
-      }
-
+      // Optimistic update
       setBooks(books.map(b => 
         b.id === activeBookId 
           ? { ...b, transactions: [newTransaction, ...b.transactions] }
           : b
       ));
+
+      // Close form immediately for speed
+      setShowForm(null);
+      setIsSubmitting(false);
+
+      if (supabase) {
+        // Run database insert in background
+        (async () => {
+          try {
+            const { error } = await supabase
+              .from('entries')
+              .insert([{
+                id: newTransaction.id,
+                cashbook_id: activeBookId,
+                user_id: session.user.id,
+                amount: newTransaction.amount,
+                type: newTransaction.type,
+                description: newTransaction.description,
+                category: newTransaction.category,
+                mode: newTransaction.mode,
+                date: safeToISOString(newTransaction.date)
+              }]);
+            if (error) throw error;
+
+            if (newTransaction.images && newTransaction.images.length > 0) {
+              const attachmentInserts = newTransaction.images.map(url => ({
+                entry_id: newTransaction.id,
+                user_id: session.user.id,
+                file_url: url,
+                file_name: 'manual_upload',
+                file_type: 'image'
+              }));
+              await supabase.from('attachments').insert(attachmentInserts);
+            }
+          } catch (error) {
+            console.error('Error creating entry in Supabase:', error);
+            setError('Failed to sync transaction with server. Please check your connection.');
+            // Rollback
+            setBooks(prevBooks => prevBooks.map(b => 
+              b.id === activeBookId 
+                ? { ...b, transactions: b.transactions.filter(t => t.id !== newTransaction.id) }
+                : b
+            ));
+          }
+        })();
+      }
     }
 
     resetForm();
@@ -634,14 +803,29 @@ export default function App() {
     setTransactionToDelete(null);
   };
 
-  const handleBulkDelete = () => {
-    if (!activeBookId || selectedTransactions.size === 0) return;
+  const handleBulkDelete = async () => {
+    if (!activeBookId || selectedTransactions.size === 0 || !session) return;
+
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('entries')
+          .delete()
+          .in('id', Array.from(selectedTransactions))
+          .eq('user_id', session.user.id);
+        if (error) throw error;
+      } catch (error) {
+        console.error('Error bulk deleting entries from Supabase:', error);
+      }
+    }
+
     setBooks(books.map(b => 
       b.id === activeBookId 
         ? { ...b, transactions: b.transactions.filter(t => !selectedTransactions.has(t.id)) }
         : b
     ));
     setSelectedTransactions(new Set());
+    setShowBulkTransactionDeleteConfirm(false);
   };
 
   const handleEditTransaction = (t: Transaction) => {
@@ -689,6 +873,7 @@ export default function App() {
     setTransactionDurationFilter('All');
     setTransactionCategoryFilter('All');
     setTransactionSearchQuery('');
+    setIsSubmitting(false);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -763,88 +948,24 @@ export default function App() {
 
       const doc = new jsPDF();
       
-      // Header
-      doc.setFontSize(20);
-      doc.setTextColor(79, 70, 229); // Indigo-600
-      doc.text(activeBook.name, 14, 20);
-      
-      doc.setFontSize(9);
-      doc.setTextColor(100);
-      doc.text(`Report Date: ${new Date().toLocaleDateString('en-IN')}`, 14, 28);
-
-      // Summary Box (Compact)
-      doc.setDrawColor(226, 232, 240); // Slate-200
-      doc.setFillColor(248, 250, 252); // Slate-50
-      doc.roundedRect(14, 35, 182, 30, 2, 2, 'FD');
-
-      doc.setFontSize(10);
-      doc.setTextColor(100);
-      doc.text("Net Balance", 20, 45);
-      doc.setFontSize(16);
-      if (totals.net >= 0) {
-        doc.setTextColor(5, 150, 105); // Emerald
-      } else {
-        doc.setTextColor(225, 29, 72); // Rose
-      }
-      doc.text(formatCurrency(totals.net), 20, 55);
-
-      doc.setFontSize(9);
-      doc.setTextColor(100);
-      doc.text("Total In (+)", 100, 45);
-      doc.setTextColor(5, 150, 105);
-      doc.text(formatCurrency(totals.in), 100, 55);
-
-      doc.setTextColor(100);
-      doc.text("Total Out (-)", 150, 45);
-      doc.setTextColor(225, 29, 72);
-      doc.text(formatCurrency(totals.out), 150, 55);
-
       setReportLoading({ type: 'pdf', progress: 40 });
 
-      // Transactions Table (Starts on same page)
-      const tableData = filteredTransactions.map(t => [
-        t.date.toLocaleDateString('en-IN'),
-        t.description || '--',
-        t.category,
-        t.mode,
-        t.type === 'in' ? formatCurrency(t.amount) : '',
-        t.type === 'out' ? formatCurrency(t.amount) : '',
-      ]);
-
-      autoTable(doc, {
-        startY: 75,
-        head: [['Date', 'Details', 'Category', 'Mode', 'In', 'Out']],
-        body: tableData,
-        theme: 'grid',
-        headStyles: { fillColor: [79, 70, 229], fontSize: 9, fontStyle: 'bold' },
-        bodyStyles: { fontSize: 8 },
-        columnStyles: {
-          4: { halign: 'right', textColor: [5, 150, 105] },
-          5: { halign: 'right', textColor: [225, 29, 72] }
-        },
-        margin: { top: 20 },
-        foot: [['', '', '', 'TOTAL', formatCurrency(totals.in), formatCurrency(totals.out)],
-               ['', '', '', 'NET BALANCE', '', formatCurrency(totals.net)]],
-        footStyles: { fillColor: [248, 250, 252], textColor: [30, 41, 59], fontStyle: 'bold', fontSize: 9 }
-      });
-
-      setReportLoading({ type: 'pdf', progress: 50 });
-
-      // Attachments on separate pages
+      // Attachments only
       const transactionsWithImages = filteredTransactions.filter(t => t.images && t.images.length > 0);
       
       if (transactionsWithImages.length > 0) {
         const totalImages = transactionsWithImages.reduce((acc, t) => acc + (t.images?.length || 0), 0);
         let processedImages = 0;
+        let isFirstPage = true;
 
         for (const t of transactionsWithImages) {
           if (t.images) {
             for (const img of t.images) {
               try {
-                doc.addPage();
-                doc.setFontSize(12);
-                doc.setTextColor(0);
-                doc.text(`${t.description || 'Transaction'} | ${t.date.toLocaleDateString()} | ${formatCurrency(t.amount)}`, 14, 15);
+                if (!isFirstPage) {
+                  doc.addPage();
+                }
+                isFirstPage = false;
                 
                 // Detect format from base64
                 let format = 'JPEG';
@@ -854,19 +975,27 @@ export default function App() {
                 // Clean base64 string if needed
                 const base64Data = img.includes('base64,') ? img.split('base64,')[1] : img;
                 
-                // Add image to PDF
-                doc.addImage(base64Data, format as any, 14, 25, 180, 180, undefined, 'FAST');
+                // Add image to PDF - fit to page (90%)
+                const pageWidth = doc.internal.pageSize.getWidth();
+                const pageHeight = doc.internal.pageSize.getHeight();
+                const imgWidth = pageWidth * 0.9;
+                const imgHeight = pageHeight * 0.9;
+                const x = (pageWidth - imgWidth) / 2;
+                const y = (pageHeight - imgHeight) / 2;
+                doc.addImage(base64Data, format as any, x, y, imgWidth, imgHeight, undefined, 'FAST');
               } catch (e) {
                 console.error("Could not add image to PDF:", e);
-                doc.text("Error loading image", 14, 30);
               }
               
               processedImages++;
-              const imageProgress = 50 + (processedImages / totalImages) * 40;
+              const imageProgress = 40 + (processedImages / totalImages) * 50;
               setReportLoading({ type: 'pdf', progress: Math.round(imageProgress) });
             }
           }
         }
+      } else {
+        doc.setFontSize(12);
+        doc.text("No attachments found in this book.", 14, 20);
       }
 
       setReportLoading({ type: 'pdf', progress: 95 });
@@ -906,10 +1035,8 @@ export default function App() {
               const result = await parseReceipt(base64String, file.type);
               
               if (result) {
-                setUploadingMessage(`Detecting ${result.category} Bill...`);
-                // Artificial delay so user can see the detection message
-                await new Promise(r => setTimeout(r, 1500));
-
+                setUploadingMessage(`Detected ${result.category}! Syncing...`);
+                
                 const newTransaction: Transaction = {
                   id: safeUUID(),
                   amount: result.amount,
@@ -918,48 +1045,60 @@ export default function App() {
                   category: result.category,
                   mode: 'Online',
                   date: result.date ? new Date(result.date) : new Date(),
-                  images: [reader.result as string]
+                  images: [reader.result as string],
+                  isAi: true
                 };
 
-                if (supabase && session) {
-                  try {
-                    const { error } = await supabase
-                      .from('entries')
-                      .insert([{
-                        id: newTransaction.id,
-                        cashbook_id: activeBookId,
-                        user_id: session.user.id,
-                        amount: newTransaction.amount,
-                        type: newTransaction.type,
-                        description: newTransaction.description,
-                        category: newTransaction.category,
-                        mode: newTransaction.mode,
-                        date: safeToISOString(newTransaction.date)
-                      }]);
-                    if (error) throw error;
-
-                    // Handle AI attachments
-                    if (newTransaction.images && newTransaction.images.length > 0) {
-                      const aiAttachmentInserts = newTransaction.images.map(url => ({
-                        entry_id: newTransaction.id,
-                        user_id: session.user.id,
-                        file_url: url,
-                        file_name: 'ai_detected_bill',
-                        file_type: 'image',
-                        raw_ai_data: result
-                      }));
-                      await supabase.from('ai_attachments').insert(aiAttachmentInserts);
-                    }
-                  } catch (error) {
-                    console.error('Error creating entry in Supabase:', error);
-                  }
-                }
-
+                // Optimistic update - show in UI immediately after AI detection
                 setBooks(prev => prev.map(b => 
                   b.id === activeBookId 
                     ? { ...b, transactions: [newTransaction, ...b.transactions] }
                     : b
                 ));
+
+                if (supabase && session) {
+                  // Run database sync in background
+                  (async () => {
+                    try {
+                      const { error } = await supabase
+                        .from('entries')
+                        .insert([{
+                          id: newTransaction.id,
+                          cashbook_id: activeBookId,
+                          user_id: session.user.id,
+                          amount: newTransaction.amount,
+                          type: newTransaction.type,
+                          description: newTransaction.description,
+                          category: newTransaction.category,
+                          mode: newTransaction.mode,
+                          date: safeToISOString(newTransaction.date)
+                        }]);
+                      if (error) throw error;
+
+                      // Handle AI attachments
+                      if (newTransaction.images && newTransaction.images.length > 0) {
+                        const aiAttachmentInserts = newTransaction.images.map(url => ({
+                          entry_id: newTransaction.id,
+                          user_id: session.user.id,
+                          file_url: url,
+                          file_name: 'ai_detected_bill',
+                          file_type: 'image',
+                          raw_ai_data: result
+                        }));
+                        await supabase.from('ai_attachments').insert(aiAttachmentInserts);
+                      }
+                    } catch (error) {
+                      console.error('Error syncing AI entry to Supabase:', error);
+                      setError('AI entry detected but failed to sync with server.');
+                      // Rollback
+                      setBooks(prev => prev.map(b => 
+                        b.id === activeBookId 
+                          ? { ...b, transactions: b.transactions.filter(t => t.id !== newTransaction.id) }
+                          : b
+                      ));
+                    }
+                  })();
+                }
               }
               resolve();
             } catch (err) {
@@ -971,9 +1110,11 @@ export default function App() {
         });
       }
       setIsUploading(false);
+      setShowDropZone(false);
     } catch (error: any) {
       console.error("Upload failed", error);
       setIsUploading(false);
+      setShowDropZone(false);
       setError(error.message || 'Upload failed');
     }
     // Reset input
@@ -1003,18 +1144,24 @@ export default function App() {
           >
             <Loader2 size={40} className="text-indigo-600" />
           </motion.div>
-          <p className="text-slate-500 dark:text-slate-400 font-medium animate-pulse">Loading AI Cashbook...</p>
+          <p className={cn(
+            "font-medium animate-pulse transition-colors duration-300",
+            theme === 'dark' ? "text-slate-400" : "text-black"
+          )}>Loading AI Cashbook...</p>
         </div>
       </div>
     );
   }
 
   if (!session) {
-    return <Auth />;
+    return <Auth theme={theme} />;
   }
 
   return (
-    <div className="min-h-screen transition-colors duration-300">
+    <div className={cn(
+      "min-h-screen transition-colors duration-300",
+      theme === 'dark' ? "bg-black text-slate-100" : "bg-slate-50 text-black"
+    )}>
       {/* Error Alert */}
       <AnimatePresence>
         {error && (
@@ -1035,7 +1182,10 @@ export default function App() {
 
       {/* Header Component */}
       {!activeBookId && (
-        <header className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 sticky top-0 z-50 px-4 h-14 sm:h-16">
+        <header className={cn(
+          "border-b sticky top-0 z-50 px-4 h-14 sm:h-16 transition-colors duration-300",
+          theme === 'dark' ? "bg-black border-zinc-900" : "bg-white border-slate-100"
+        )}>
           <div className="max-w-6xl mx-auto h-full flex items-center justify-between gap-2 sm:gap-4">
             
             {/* Left: Logo */}
@@ -1049,7 +1199,10 @@ export default function App() {
               </motion.div>
               <div className="flex items-center gap-1 leading-none">
                 <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm sm:text-base tracking-tight">AI</span>
-                <span className="font-black text-slate-800 dark:text-white text-sm sm:text-base tracking-tight">Cashbook</span>
+                <span className={cn(
+                  "font-black text-sm sm:text-base tracking-tight transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-100" : "text-slate-800"
+                )}>Cashbook</span>
               </div>
             </div>
 
@@ -1062,7 +1215,10 @@ export default function App() {
                   placeholder="Search your books..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 bg-slate-100 dark:bg-slate-800 border-none rounded-full focus:ring-2 focus:ring-indigo-500 outline-none transition-all dark:text-white"
+                  className={cn(
+                    "w-full pl-10 pr-4 py-2 border-none rounded-full focus:ring-2 focus:ring-indigo-500 outline-none transition-all",
+                    theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-100 text-black"
+                  )}
                 />
               </div>
             </div>
@@ -1094,16 +1250,44 @@ export default function App() {
                       initial={{ opacity: 0, y: 10, scale: 0.95 }}
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="absolute right-0 mt-2 w-64 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 p-2 z-50"
+                      className={cn(
+                        "absolute right-0 mt-2 w-64 rounded-2xl shadow-2xl border p-2 z-50 transition-colors duration-300",
+                        theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100"
+                      )}
                     >
-                      <div className="p-3 border-b border-slate-100 dark:border-slate-800 mb-2">
+                      <div className={cn(
+                        "p-3 border-b mb-2 transition-colors duration-300",
+                        theme === 'dark' ? "border-zinc-800" : "border-slate-100"
+                      )}>
                         <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Signed in as</p>
-                        <p className="font-bold text-slate-800 dark:text-white truncate">{userName}</p>
+                        <p className={cn(
+                          "font-bold truncate transition-colors duration-300",
+                          theme === 'dark' ? "text-slate-100" : "text-black"
+                        )}>{userName}</p>
                       </div>
 
                       <button 
+                        onClick={toggleTheme}
+                        className={cn(
+                          "w-full flex items-center gap-3 p-3 rounded-xl transition-all",
+                          theme === 'dark' ? "hover:bg-zinc-900 text-slate-300" : "hover:bg-slate-50 text-black"
+                        )}
+                      >
+                        <div className="flex items-center gap-3 flex-1">
+                          {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+                          <span className="font-medium text-left">Appearance</span>
+                        </div>
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          {theme}
+                        </div>
+                      </button>
+
+                      <button 
                         onClick={() => { setIsHelpOpen(true); setIsProfileOpen(false); }}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all"
+                        className={cn(
+                          "w-full flex items-center gap-3 p-3 rounded-xl transition-all",
+                          theme === 'dark' ? "hover:bg-zinc-900 text-slate-300" : "hover:bg-slate-50 text-black"
+                        )}
                       >
                         <HelpCircle size={18} />
                         <span className="font-medium flex-1 text-left">Help & Support</span>
@@ -1111,7 +1295,10 @@ export default function App() {
 
                       <button 
                         onClick={() => { setIsEditingName(true); setIsProfileOpen(false); }}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-all"
+                        className={cn(
+                          "w-full flex items-center gap-3 p-3 rounded-xl transition-all",
+                          theme === 'dark' ? "hover:bg-zinc-900 text-slate-300" : "hover:bg-slate-50 text-black"
+                        )}
                       >
                         <Settings size={18} />
                         <span className="font-medium flex-1 text-left">Profile Settings</span>
@@ -1138,7 +1325,10 @@ export default function App() {
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className="absolute inset-0 bg-white dark:bg-slate-900 z-[60] px-4 flex items-center gap-2"
+                className={cn(
+                  "absolute inset-0 z-[60] px-4 flex items-center gap-2 transition-colors duration-300",
+                  theme === 'dark' ? "bg-black" : "bg-white"
+                )}
               >
                 <button onClick={() => setIsSearchExpanded(false)} className="p-2 text-slate-400 hover:text-indigo-600">
                   <ArrowLeft size={20} />
@@ -1149,7 +1339,10 @@ export default function App() {
                   placeholder="Search books..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 bg-slate-100 dark:bg-slate-800 rounded-full py-2 px-4 outline-none text-sm dark:text-white"
+                  className={cn(
+                    "flex-1 rounded-full py-2 px-4 outline-none text-sm transition-all",
+                    theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-100 text-black"
+                  )}
                 />
                 {searchQuery && (
                   <button onClick={() => setSearchQuery('')} className="p-2 text-slate-400">
@@ -1174,7 +1367,10 @@ export default function App() {
               className="flex flex-col items-center justify-center min-h-[60vh] space-y-4"
             >
               <Loader2 size={48} className="text-indigo-600 animate-spin" />
-              <p className="text-slate-500 dark:text-slate-400 font-medium tracking-tight">
+              <p className={cn(
+                "font-medium tracking-tight transition-colors duration-300",
+                theme === 'dark' ? "text-slate-400" : "text-black"
+              )}>
                 Loading your financial data...
               </p>
             </motion.div>
@@ -1190,33 +1386,68 @@ export default function App() {
               {/* User Welcome Section */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="space-y-0.5 sm:space-y-1">
-                  <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 dark:text-white">
-                    Hello, <span className="text-indigo-600 dark:text-indigo-400">{userName}</span>!
-                  </h2>
-                  <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400">Welcome back to your financial dashboard.</p>
+                    <h2 className={cn(
+                      "text-2xl sm:text-3xl font-bold transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-100" : "text-slate-800"
+                    )}>
+                      Hello, <span className="text-indigo-600 dark:text-indigo-400">{userName}</span>!
+                    </h2>
+                    <p className={cn(
+                      "text-sm sm:text-base transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                    )}>Welcome back to your financial dashboard.</p>
                 </div>
 
                 <div className="flex items-center gap-3 sm:gap-4">
-                  {books.length > 0 && (
+                  {selectedBooks.size > 0 ? (
                     <button
-                      onClick={() => setIsCreatingBook(true)}
-                      className="flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none transition-all flex items-center justify-center gap-2 text-sm sm:text-base"
+                      onClick={() => setShowBulkDeleteConfirm(true)}
+                      className={cn(
+                        "flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm sm:text-base animate-in fade-in zoom-in duration-200",
+                        theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
+                      )}
                     >
-                      <Plus size={18} />
-                      Create a Book
+                      <Trash2 size={18} />
+                      Delete ({selectedBooks.size})
                     </button>
+                  ) : (
+                    books.length > 0 && (
+                      <button
+                        onClick={() => setIsCreatingBook(true)}
+                        className={cn(
+                          "flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm sm:text-base",
+                          theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
+                        )}
+                      >
+                        <Plus size={18} />
+                        Create a Book
+                      </button>
+                    )
                   )}
 
-                  <div className="hidden sm:flex items-center gap-2 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm">
+                  <div className={cn(
+                    "hidden sm:flex items-center gap-2 p-1 rounded-xl border shadow-sm transition-colors duration-300",
+                    theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100"
+                  )}>
                     <button 
                       onClick={() => setViewMode('grid')}
-                      className={cn("p-2 rounded-lg transition-all", viewMode === 'grid' ? "bg-indigo-600 text-white shadow-lg" : "text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800")}
+                      className={cn(
+                        "p-2 rounded-lg transition-all cursor-pointer", 
+                        viewMode === 'grid' 
+                          ? (theme === 'dark' ? "bg-indigo-600 text-white shadow-none" : "bg-indigo-600 text-white shadow-lg shadow-indigo-100") 
+                          : (theme === 'dark' ? "text-slate-400 hover:bg-slate-800" : "text-slate-400 hover:bg-slate-50")
+                      )}
                     >
                       <LayoutGrid size={20} />
                     </button>
                     <button 
                       onClick={() => setViewMode('list')}
-                      className={cn("p-2 rounded-lg transition-all", viewMode === 'list' ? "bg-indigo-600 text-white shadow-lg" : "text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800")}
+                      className={cn(
+                        "p-2 rounded-lg transition-all cursor-pointer", 
+                        viewMode === 'list' 
+                          ? (theme === 'dark' ? "bg-indigo-600 text-white shadow-none" : "bg-indigo-600 text-white shadow-lg shadow-indigo-100") 
+                          : (theme === 'dark' ? "text-slate-400 hover:bg-slate-800" : "text-slate-400 hover:bg-slate-50")
+                      )}
                     >
                       <List size={20} />
                     </button>
@@ -1226,17 +1457,32 @@ export default function App() {
 
               {/* Books Section */}
               {filteredBooks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 sm:py-12 text-center space-y-4 sm:space-y-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-[24px] sm:rounded-[32px] shadow-sm mx-auto max-w-md">
-                  <div className="w-12 h-12 sm:w-16 sm:h-16 bg-indigo-50 dark:bg-indigo-900/20 rounded-full flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                <div className={cn(
+                  "flex flex-col items-center justify-center py-8 sm:py-12 text-center space-y-4 sm:space-y-6 border rounded-[24px] sm:rounded-[32px] shadow-sm mx-auto max-w-md transition-colors duration-300",
+                  theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100"
+                )}>
+                  <div className={cn(
+                    "w-12 h-12 sm:w-16 sm:h-16 rounded-full flex items-center justify-center transition-colors duration-300",
+                    theme === 'dark' ? "bg-indigo-950/30 text-indigo-400" : "bg-indigo-50 text-indigo-600"
+                  )}>
                     <BookOpen size={24} className="sm:w-8 sm:h-8" />
                   </div>
-                  <div className="space-y-1 sm:space-y-2">
-                    <h3 className="text-lg sm:text-xl font-black text-slate-800 dark:text-white">No Cashbooks Yet</h3>
-                    <p className="text-slate-500 dark:text-slate-400 max-w-[200px] sm:max-w-xs mx-auto text-[10px] sm:text-xs">Start your financial journey by creating your first cashbook today.</p>
+                  <div className="space-y-1 sm:space-y-2 px-4">
+                    <h3 className={cn(
+                      "text-lg sm:text-xl font-black transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-100" : "text-slate-800"
+                    )}>No Cashbooks Yet</h3>
+                    <p className={cn(
+                      "max-w-[200px] sm:max-w-xs mx-auto text-[10px] sm:text-xs transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                    )}>Start your financial journey by creating your first cashbook today.</p>
                   </div>
                   <button
                     onClick={() => setIsCreatingBook(true)}
-                    className="py-2 sm:py-2.5 px-5 sm:px-8 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-xl shadow-indigo-200 dark:shadow-none transition-all flex items-center gap-2 active:scale-95 text-xs sm:text-sm"
+                    className={cn(
+                      "py-2 sm:py-2.5 px-5 sm:px-8 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all flex items-center gap-2 active:scale-95 text-xs sm:text-sm",
+                      theme === 'dark' ? "shadow-none" : "shadow-xl shadow-indigo-200"
+                    )}
                   >
                     <Plus size={16} />
                     Create a Book
@@ -1252,71 +1498,66 @@ export default function App() {
                       key={book.id}
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
+                      onMouseDown={() => onTouchStartBook(book.id)}
+                      onMouseUp={onTouchEndBook}
+                      onTouchStart={() => onTouchStartBook(book.id)}
+                      onTouchEnd={onTouchEndBook}
+                      onClick={() => handleBookPress(book.id)}
                       className={cn(
-                        "group p-3 sm:p-6 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl sm:rounded-3xl hover:border-indigo-300 dark:hover:border-indigo-500/50 hover:shadow-2xl hover:shadow-indigo-500/10 transition-shadow duration-200 relative overflow-hidden",
-                        (viewMode === 'list' || window.innerWidth < 640) && "flex items-center justify-between py-2 sm:py-4"
+                        "group p-4 sm:p-5 border rounded-2xl sm:rounded-3xl transition-all duration-200 relative overflow-hidden select-none flex items-center justify-between cursor-pointer",
+                        theme === 'dark' ? "bg-zinc-950 border-zinc-800" : "bg-white border-slate-100",
                       )}
                     >
-                      <div className="flex items-center gap-2.5 sm:gap-4">
-                        <div className="p-1.5 sm:p-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-lg sm:rounded-2xl group-hover:scale-110 transition-transform">
-                          <BookOpen size={16} className="sm:w-6 sm:h-6" />
+                      {selectedBooks.has(book.id) && (
+                        <div className="absolute top-2 right-2 z-10">
+                          <div className="bg-indigo-600 text-white rounded-full p-1 shadow-md">
+                            <Check size={12} />
+                          </div>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-3 sm:gap-4">
+                        <div className="p-2 sm:p-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-xl sm:rounded-2xl group-hover:scale-110 transition-transform">
+                          <BookOpen size={20} className="sm:w-6 sm:h-6" />
                         </div>
                         <div className="min-w-0">
-                          <h4 className="font-bold text-slate-800 dark:text-white text-xs sm:text-lg truncate max-w-[100px] xs:max-w-[140px] sm:max-w-none">{book.name}</h4>
-                          <p className="text-[8px] sm:text-xs text-slate-400">Created on {book.createdAt.toLocaleDateString()}</p>
+                          <h4 className={cn(
+                            "font-bold text-sm sm:text-lg truncate max-w-[120px] xs:max-w-[160px] sm:max-w-none transition-colors duration-300",
+                            theme === 'dark' ? "text-slate-100" : "text-slate-800"
+                          )}>{book.name}</h4>
+                          <p className={cn(
+                            "text-[10px] sm:text-xs transition-colors duration-300",
+                            theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                          )}>Created on {book.createdAt.toLocaleDateString()}</p>
                         </div>
                       </div>
                       
-                      {(viewMode === 'grid' && window.innerWidth >= 640) ? (
-                        <>
-                          <div className="mt-6 pt-4 border-t border-slate-50 dark:border-slate-800 flex justify-end items-center">
-                            <div className="flex items-center gap-2">
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); setIsEditingBook(book.id); setEditBookName(book.name); }}
-                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all"
-                              >
-                                <Pencil size={18} />
-                              </button>
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleDeleteBook(book.id); }}
-                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-all"
-                              >
-                                <Trash2 size={18} />
-                              </button>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => setActiveBookId(book.id)}
-                            className="w-full mt-4 py-3 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-600 hover:text-white transition-all group/btn"
+                      <div className="flex items-center gap-2 sm:gap-6">
+                        <div className="flex items-center gap-0.5 sm:gap-1 border-l border-slate-100 dark:border-slate-800 pl-1.5 sm:pl-4">
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); setIsEditingBook(book.id); setEditBookName(book.name); }}
+                            className="p-1 sm:p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all"
                           >
-                            View Book
-                            <ArrowRight size={18} className="group-hover/btn:translate-x-1 transition-transform" />
+                            <Pencil size={12} className="sm:w-[18px] sm:h-[18px]" />
                           </button>
-                        </>
-                      ) : (
-                        <div className="flex items-center gap-2 sm:gap-6">
-                          <div className="flex items-center gap-0.5 sm:gap-1 border-l border-slate-100 dark:border-slate-800 pl-1.5 sm:pl-4">
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); setIsEditingBook(book.id); setEditBookName(book.name); }}
-                              className="p-1 sm:p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all"
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); handleDeleteBook(book.id); }}
+                            className="p-1 sm:p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-all"
+                          >
+                            <Trash2 size={12} className="sm:w-[18px] sm:h-[18px]" />
+                          </button>
+                          <button 
+                            onClick={() => setActiveBookId(book.id)}
+                            className="p-1.5 sm:p-2 text-indigo-800 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all ml-0.5"
+                          >
+                            <motion.div
+                              animate={{ x: [0, 3, 0] }}
+                              transition={{ repeat: Infinity, duration: 1.5, ease: "easeInOut" }}
                             >
-                              <Pencil size={12} className="sm:w-[18px] sm:h-[18px]" />
-                            </button>
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); handleDeleteBook(book.id); }}
-                              className="p-1 sm:p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-all"
-                            >
-                              <Trash2 size={12} className="sm:w-[18px] sm:h-[18px]" />
-                            </button>
-                            <button 
-                              onClick={() => setActiveBookId(book.id)}
-                              className="p-1 sm:p-2 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all ml-0.5"
-                            >
-                              <ArrowRight size={14} className="sm:w-5 sm:h-5" />
-                            </button>
-                          </div>
+                              <ArrowRight size={18} className="sm:w-6 sm:h-6" />
+                            </motion.div>
+                          </button>
                         </div>
-                      )}
+                      </div>
                     </motion.div>
                   ))}
                 </div>
@@ -1340,14 +1581,22 @@ export default function App() {
                   >
                     <ArrowLeft size={24} />
                   </button>
-                  <h2 className="text-xl sm:text-2xl font-bold text-slate-800 dark:text-white truncate max-w-[150px] sm:max-w-none">{activeBook?.name}</h2>
+                  <h2 className={cn(
+                    "text-xl sm:text-2xl font-bold truncate max-w-[150px] sm:max-w-none transition-colors duration-300",
+                    theme === 'dark' ? "text-slate-100" : "text-black"
+                  )}>{activeBook?.name}</h2>
                 </div>
                 
                 {/* Desktop Reports Menu */}
                 <div className="hidden sm:block relative" ref={reportsRef}>
                   <button 
                     onClick={() => setShowReportsMenu(!showReportsMenu)}
-                    className="flex items-center gap-2 px-4 py-2 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition-all"
+                    className={cn(
+                      "flex items-center gap-2 px-4 py-2 border font-semibold rounded-xl transition-all",
+                      theme === 'dark' 
+                        ? "border-slate-800 text-slate-200 hover:bg-slate-800" 
+                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    )}
                   >
                     <DownloadCloud size={18} />
                     Reports
@@ -1358,7 +1607,7 @@ export default function App() {
                         initial={{ opacity: 0, y: 10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                        className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 p-2 z-50"
+                        className="absolute right-0 mt-2 w-48 bg-white dark:bg-zinc-950 rounded-2xl shadow-2xl border border-slate-100 dark:border-zinc-900 p-2 z-50"
                       >
                         <button 
                           onClick={exportToExcel}
@@ -1381,28 +1630,44 @@ export default function App() {
               </div>
 
               {/* Mobile Summary Card (Reference Image Style) */}
-              <div className="sm:hidden bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className={cn(
+                "sm:hidden rounded-3xl border shadow-sm overflow-hidden transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100"
+              )}>
                 <div className="p-5 space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-white">Net Balance</h3>
+                    <h3 className={cn(
+                      "text-lg font-bold transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-100" : "text-black"
+                    )}>Net Balance</h3>
                     <p className={cn(
-                      "font-black text-slate-800 dark:text-white",
+                      "font-black transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-100" : "text-black",
                       formatCurrency(totals.net).length > 12 ? "text-lg" : "text-xl"
                     )}>
                       {formatCurrency(totals.net)}
                     </p>
                   </div>
                   
-                  <div className="space-y-2 pt-2 border-t border-slate-50 dark:border-slate-800">
+                  <div className={cn(
+                    "space-y-2 pt-2 border-t transition-colors duration-300",
+                    theme === 'dark' ? "border-zinc-800" : "border-slate-50"
+                  )}>
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-bold text-slate-500">Total In (+)</p>
+                      <p className={cn(
+                        "text-sm font-bold transition-colors duration-300",
+                        theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                      )}>Total In (+)</p>
                       <p className={cn(
                         "font-black text-emerald-600",
                         formatCurrency(totals.in).length > 12 ? "text-xs" : "text-sm"
                       )}>{formatCurrency(totals.in)}</p>
                     </div>
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-bold text-slate-500">Total Out (-)</p>
+                      <p className={cn(
+                        "text-sm font-bold transition-colors duration-300",
+                        theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                      )}>Total Out (-)</p>
                       <p className={cn(
                         "font-black text-rose-600",
                         formatCurrency(totals.out).length > 12 ? "text-xs" : "text-sm"
@@ -1415,7 +1680,10 @@ export default function App() {
                 <div className="border-t border-slate-50 dark:border-slate-800">
                   <button 
                     onClick={() => setShowReportsMenu(!showReportsMenu)}
-                    className="w-full py-3 flex items-center justify-center gap-2 text-indigo-600 font-bold text-xs uppercase tracking-wider hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
+                    className={cn(
+                      "w-full py-3 flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer",
+                      theme === 'dark' ? "text-indigo-400 hover:bg-slate-800" : "text-indigo-600 hover:bg-slate-50"
+                    )}
                   >
                     View Reports
                     <ChevronDown size={16} className={cn("transition-transform", showReportsMenu && "rotate-180")} />
@@ -1435,14 +1703,20 @@ export default function App() {
                             className="flex items-center justify-center gap-2 py-4 hover:bg-white dark:hover:bg-slate-800 transition-all"
                           >
                             <Download size={16} className="text-emerald-600" />
-                            <span className="text-[10px] font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest">Excel</span>
+                            <span className={cn(
+                              "text-[10px] font-black uppercase tracking-widest transition-colors duration-300",
+                              theme === 'dark' ? "text-slate-300" : "text-black"
+                            )}>Excel</span>
                           </button>
                           <button 
                             onClick={exportToPDF}
                             className="flex items-center justify-center gap-2 py-4 hover:bg-white dark:hover:bg-slate-800 transition-all"
                           >
                             <FileText size={16} className="text-rose-600" />
-                            <span className="text-[10px] font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest">PDF</span>
+                            <span className={cn(
+                              "text-[10px] font-black uppercase tracking-widest transition-colors duration-300",
+                              theme === 'dark' ? "text-slate-300" : "text-black"
+                            )}>PDF</span>
                           </button>
                         </div>
                       </motion.div>
@@ -1486,17 +1760,20 @@ export default function App() {
                     placeholder="Search by remark, amount, category..."
                     value={transactionSearchQuery}
                     onChange={(e) => setTransactionSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 sm:py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white text-sm"
+                    className={cn(
+                      "w-full pl-10 pr-4 py-2.5 sm:py-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm",
+                      theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-slate-100" : "bg-white border-slate-200 text-black"
+                    )}
                   />
                 </div>
                 <div className="flex items-center gap-2 w-full lg:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
                   <button
                     onClick={toggleSelectAll}
                     className={cn(
-                      "hidden lg:flex items-center gap-2 px-4 py-2.5 sm:py-3 rounded-xl font-bold transition-all text-[10px] sm:text-sm whitespace-nowrap",
+                      "hidden lg:flex items-center gap-2 px-4 py-2.5 sm:py-3 rounded-xl font-bold transition-all text-[10px] sm:text-sm whitespace-nowrap cursor-pointer",
                       selectedTransactions.size === filteredTransactions.length && filteredTransactions.length > 0
-                        ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100 dark:shadow-none"
-                        : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                        ? (theme === 'dark' ? "bg-indigo-600 text-white shadow-none" : "bg-indigo-600 text-white shadow-lg shadow-indigo-100")
+                        : theme === 'dark' ? "bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
                     )}
                   >
                     {selectedTransactions.size === filteredTransactions.length && filteredTransactions.length > 0 ? <CheckSquare size={16} /> : <Square size={16} />}
@@ -1504,8 +1781,11 @@ export default function App() {
                   </button>
                   {selectedTransactions.size > 0 && (
                     <button
-                      onClick={handleBulkDelete}
-                      className="flex items-center gap-2 px-4 py-2.5 sm:py-3 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all shadow-lg shadow-rose-100 dark:shadow-none whitespace-nowrap text-xs sm:text-sm"
+                      onClick={() => setShowBulkTransactionDeleteConfirm(true)}
+                      className={cn(
+                        "flex items-center gap-2 px-4 py-2.5 sm:py-3 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all whitespace-nowrap text-xs sm:text-sm",
+                        theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
+                      )}
                     >
                       <Trash size={16} className="sm:w-[18px] sm:h-[18px]" />
                       Delete ({selectedTransactions.size})
@@ -1515,7 +1795,10 @@ export default function App() {
                     <select 
                       value={transactionTypeFilter}
                       onChange={(e) => setTransactionTypeFilter(e.target.value as any)}
-                      className="w-full pl-3 sm:pl-4 pr-8 sm:pr-10 py-2.5 sm:py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white text-[10px] sm:text-sm font-bold appearance-none"
+                      className={cn(
+                        "w-full pl-3 sm:pl-4 pr-8 sm:pr-10 py-2.5 sm:py-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-[10px] sm:text-sm font-bold appearance-none",
+                        theme === 'dark' ? "bg-slate-900 border-slate-800 text-white" : "bg-white border-slate-200 text-black"
+                      )}
                     >
                       <option value="all">All Types</option>
                       <option value="in">Cash In</option>
@@ -1527,7 +1810,10 @@ export default function App() {
                     <select 
                       value={transactionDurationFilter}
                       onChange={(e) => setTransactionDurationFilter(e.target.value)}
-                      className="w-full pl-3 sm:pl-4 pr-8 sm:pr-10 py-2.5 sm:py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white text-[10px] sm:text-sm font-bold appearance-none"
+                      className={cn(
+                        "w-full pl-3 sm:pl-4 pr-8 sm:pr-10 py-2.5 sm:py-3 border rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-[10px] sm:text-sm font-bold appearance-none",
+                        theme === 'dark' ? "bg-slate-900 border-slate-800 text-white" : "bg-white border-slate-200 text-black"
+                      )}
                     >
                       {DURATIONS.map(d => <option key={d} value={d}>{d}</option>)}
                     </select>
@@ -1538,12 +1824,18 @@ export default function App() {
 
               {/* Balance Cards Row (Desktop Only) */}
               <div className="hidden lg:grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 flex items-center gap-4 shadow-sm">
+                <div className={cn(
+                  "p-6 rounded-3xl border flex items-center gap-4 shadow-sm transition-colors duration-300",
+                  theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+                )}>
                   <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-2xl">
                     <Plus size={24} />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Cash In</p>
+                    <p className={cn(
+                      "text-sm font-bold uppercase tracking-wider",
+                      theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                    )}>Cash In</p>
                     <p className={cn(
                       "font-black text-emerald-600 dark:text-emerald-400",
                       formatCurrency(totals.in).length > 10 ? "text-xl" : "text-3xl"
@@ -1553,12 +1845,18 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 flex items-center gap-4 shadow-sm">
+                <div className={cn(
+                  "p-6 rounded-3xl border flex items-center gap-4 shadow-sm transition-colors duration-300",
+                  theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+                )}>
                   <div className="p-3 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-2xl">
                     <Minus size={24} />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Cash Out</p>
+                    <p className={cn(
+                      "text-sm font-bold uppercase tracking-wider",
+                      theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                    )}>Cash Out</p>
                     <p className={cn(
                       "font-black text-rose-600 dark:text-rose-400",
                       formatCurrency(totals.out).length > 10 ? "text-xl" : "text-3xl"
@@ -1568,12 +1866,18 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-100 dark:border-slate-800 flex items-center gap-4 shadow-sm">
+                <div className={cn(
+                  "p-6 rounded-3xl border flex items-center gap-4 shadow-sm transition-colors duration-300",
+                  theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+                )}>
                   <div className="p-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-2xl">
                     <Wallet size={24} />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Net Balance</p>
+                    <p className={cn(
+                      "text-sm font-bold uppercase tracking-wider",
+                      theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                    )}>Net Balance</p>
                     <p className={cn(
                       "font-black text-indigo-600 dark:text-indigo-400",
                       formatCurrency(totals.net).length > 10 ? "text-xl" : "text-3xl"
@@ -1589,9 +1893,18 @@ export default function App() {
                 {/* Mobile Transaction List (Card Based) */}
                 <div className="lg:hidden space-y-3">
                   {filteredTransactions.length === 0 ? (
-                    <div className="py-12 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800">
-                      <History size={40} className="mx-auto text-slate-200 mb-2" />
-                      <p className="text-slate-400 text-sm font-medium">No entries found</p>
+                    <div className={cn(
+                      "py-12 text-center rounded-3xl border transition-colors duration-300",
+                      theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+                    )}>
+                      <History size={40} className={cn(
+                        "mx-auto mb-2 transition-colors duration-300",
+                        theme === 'dark' ? "text-slate-700" : "text-slate-200"
+                      )} />
+                      <p className={cn(
+                        "text-sm font-medium transition-colors duration-300",
+                        theme === 'dark' ? "text-slate-500" : "text-black"
+                      )}>No entries found</p>
                     </div>
                   ) : (
                     (() => {
@@ -1607,7 +1920,10 @@ export default function App() {
                         <div key={date} className="space-y-2">
                           <div className="flex items-center gap-2 px-1">
                             <div className="w-1 h-4 bg-indigo-600 rounded-full" />
-                            <h4 className="text-xs font-bold text-slate-500">{date}</h4>
+                            <h4 className={cn(
+                              "text-xs font-bold transition-colors duration-300",
+                              theme === 'dark' ? "text-slate-500" : "text-slate-600"
+                            )}>{date}</h4>
                           </div>
                           
                           {transactions.map((t, idx) => {
@@ -1628,18 +1944,32 @@ export default function App() {
                                 onTouchEnd={onTouchEnd}
                                 onClick={() => handleTransactionPress(t.id)}
                                 className={cn(
-                                  "bg-white dark:bg-slate-900 rounded-xl border shadow-sm p-2.5 relative transition-all active:scale-[0.98] select-none",
+                                  "rounded-xl border shadow-sm p-2.5 relative transition-all active:scale-[0.98] select-none overflow-hidden transition-colors duration-300 cursor-pointer",
                                   selectedTransactions.has(t.id) 
-                                    ? "border-indigo-600 ring-1 ring-indigo-600 bg-indigo-50/30 dark:bg-indigo-900/10" 
-                                    : "border-slate-100 dark:border-slate-800"
+                                    ? (theme === 'dark' ? "border-indigo-500 ring-1 ring-indigo-500 bg-indigo-950/30" : "border-indigo-600 ring-1 ring-indigo-600 bg-indigo-50/30 shadow-lg") 
+                                    : (theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100")
                                 )}
                               >
+                                {t.isAi && (
+                                  <div className="absolute top-0 right-0">
+                                    <div className="bg-amber-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-sm">
+                                      <Sparkles size={6} />
+                                      AI
+                                    </div>
+                                  </div>
+                                )}
                                 <div className="flex justify-between items-start mb-1.5">
                                   <div className="flex flex-wrap gap-1">
-                                    <span className="px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 text-[8px] font-bold rounded-md">
+                                    <span className={cn(
+                                      "px-1.5 py-0.5 text-[8px] font-bold rounded-md transition-colors duration-300",
+                                      theme === 'dark' ? "bg-indigo-900/40 text-indigo-400" : "bg-indigo-50 text-indigo-600"
+                                    )}>
                                       {t.category}
                                     </span>
-                                    <span className="px-1.5 py-0.5 bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 text-[8px] font-bold rounded-md">
+                                    <span className={cn(
+                                      "px-1.5 py-0.5 text-[8px] font-bold rounded-md transition-colors duration-300",
+                                      theme === 'dark' ? "bg-slate-800 text-slate-400" : "bg-slate-50 text-slate-500"
+                                    )}>
                                       {t.mode}
                                     </span>
                                   </div>
@@ -1650,19 +1980,28 @@ export default function App() {
                                     )}>
                                       {formatCurrency(t.amount)}
                                     </p>
-                                    <p className="text-[8px] font-bold text-slate-400 leading-none">
+                                    <p className={cn(
+                                      "text-[8px] font-bold leading-none transition-colors duration-300",
+                                      theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                                    )}>
                                       Bal: {formatCurrency(runningBalance)}
                                     </p>
                                   </div>
                                 </div>
 
                                 <div className="mb-1.5">
-                                  <p className="text-[11px] font-bold text-slate-700 dark:text-slate-300 line-clamp-1">
+                                  <p className={cn(
+                                    "text-[11px] font-bold line-clamp-1 transition-colors duration-300",
+                                    theme === 'dark' ? "text-slate-100" : "text-black"
+                                  )}>
                                     {t.description || 'No details provided'}
                                   </p>
                                 </div>
 
-                                <div className="flex items-center justify-between pt-1.5 border-t border-slate-50 dark:border-slate-800">
+                                <div className={cn(
+                                  "flex items-center justify-between pt-1.5 border-t transition-colors duration-300",
+                                  theme === 'dark' ? "border-slate-800" : "border-slate-50"
+                                )}>
                                   <div className="flex items-center gap-2">
                                     {t.images && t.images.length > 0 ? (
                                       <button 
@@ -1673,19 +2012,31 @@ export default function App() {
                                           setPreviewRotation(0);
                                           setPreviewZoom(1);
                                         }}
-                                        className="flex items-center gap-1 text-indigo-600"
+                                        className={cn(
+                                          "flex items-center gap-1 transition-colors duration-300",
+                                          theme === 'dark' ? "text-indigo-400" : "text-indigo-600"
+                                        )}
                                       >
                                         <Paperclip size={10} />
                                         <span className="text-[8px] font-bold">{t.images.length}</span>
                                       </button>
                                     ) : (
-                                      <div className="flex items-center gap-1 text-slate-300">
+                                      <div className={cn(
+                                        "flex items-center gap-1 transition-colors duration-300",
+                                        theme === 'dark' ? "text-slate-700" : "text-slate-200"
+                                      )}>
                                         <Paperclip size={10} />
                                         <span className="text-[8px] font-bold">0</span>
                                       </div>
                                     )}
-                                    <span className="text-slate-300">•</span>
-                                    <span className="text-[8px] font-bold text-slate-400">
+                                    <span className={cn(
+                                      "transition-colors duration-300",
+                                      theme === 'dark' ? "text-slate-800" : "text-slate-200"
+                                    )}>•</span>
+                                    <span className={cn(
+                                      "text-[8px] font-bold transition-colors duration-300",
+                                      theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                                    )}>
                                       {t.date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}
                                     </span>
                                   </div>
@@ -1693,15 +2044,21 @@ export default function App() {
                                   <div className="flex items-center gap-1">
                                     <button 
                                       onClick={(e) => { e.stopPropagation(); handleEditTransaction(t); }}
-                                      className="p-1 bg-slate-50 dark:bg-slate-800 text-slate-400 rounded-md hover:text-indigo-600 transition-all"
+                                      className={cn(
+                                        "p-1 rounded-md transition-all",
+                                        theme === 'dark' ? "bg-slate-800 text-slate-400 hover:text-indigo-400" : "bg-slate-50 text-slate-400 hover:text-indigo-600"
+                                      )}
                                     >
-                                      <Pencil size={12} />
+                                      <Pencil size={10} />
                                     </button>
                                     <button 
                                       onClick={(e) => { e.stopPropagation(); handleDeleteTransaction(t.id); }}
-                                      className="p-1 bg-rose-50 dark:bg-rose-900/20 text-rose-400 rounded-md hover:text-rose-600 transition-all"
+                                      className={cn(
+                                        "p-1 rounded-md transition-all",
+                                        theme === 'dark' ? "bg-rose-900/20 text-rose-400 hover:text-rose-500" : "bg-rose-50 text-rose-400 hover:text-rose-600"
+                                      )}
                                     >
-                                      <Trash2 size={12} />
+                                      <Trash2 size={10} />
                                     </button>
                                   </div>
                                 </div>
@@ -1722,11 +2079,17 @@ export default function App() {
                     </p>
                   </div>
 
-                  <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 overflow-hidden shadow-sm">
+                  <div className={cn(
+                    "rounded-3xl border overflow-hidden shadow-sm transition-colors duration-300",
+                    theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+                  )}>
                     <div className="overflow-x-auto">
                       <table className="w-full text-left">
                         <thead>
-                          <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                          <tr className={cn(
+                            "text-xs font-bold uppercase tracking-wider transition-colors duration-300",
+                            theme === 'dark' ? "bg-slate-800/50 text-slate-300" : "bg-slate-50 text-slate-400"
+                          )}>
                             <th className="px-6 py-4 w-12">
                               <button 
                                 onClick={toggleSelectAll}
@@ -1750,15 +2113,24 @@ export default function App() {
                             <th className="px-6 py-4 text-center">Actions</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                        <tbody className={cn(
+                          "divide-y transition-colors duration-300",
+                          theme === 'dark' ? "divide-slate-800" : "divide-slate-50"
+                        )}>
                           {filteredTransactions.length === 0 ? (
                             <tr>
                               <td colSpan={9} className="px-6 py-20 text-center">
                                 <div className="flex flex-col items-center justify-center space-y-3">
-                                  <div className="w-12 h-12 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center text-slate-300">
+                                  <div className={cn(
+                                    "w-12 h-12 rounded-full flex items-center justify-center transition-colors duration-300",
+                                    theme === 'dark' ? "bg-slate-800 text-slate-700" : "bg-slate-50 text-slate-300"
+                                  )}>
                                     <History size={24} />
                                   </div>
-                                  <p className="text-slate-400 text-sm font-medium">No entries found for this book.</p>
+                                  <p className={cn(
+                                    "text-sm font-medium transition-colors duration-300",
+                                    theme === 'dark' ? "text-slate-500" : "text-black"
+                                  )}>No entries found for this book.</p>
                                 </div>
                               </td>
                             </tr>
@@ -1770,8 +2142,9 @@ export default function App() {
 
                               return (
                                 <tr key={t.id} className={cn(
-                                  "group hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors",
-                                  selectedTransactions.has(t.id) && "bg-indigo-50/50 dark:bg-indigo-900/10"
+                                  "group transition-colors",
+                                  theme === 'dark' ? "hover:bg-slate-800/30" : "hover:bg-slate-50/50",
+                                  selectedTransactions.has(t.id) && (theme === 'dark' ? "bg-indigo-900/10" : "bg-indigo-50/50")
                                 )}>
                                   <td className="px-6 py-4">
                                     <button 
@@ -1787,21 +2160,44 @@ export default function App() {
                                     </button>
                                   </td>
                                   <td className="px-6 py-4 whitespace-nowrap">
-                                    <p className="font-bold text-slate-800 dark:text-white text-sm">
+                                    <p className={cn(
+                                      "font-bold text-sm",
+                                      theme === 'dark' ? "text-slate-200" : "text-slate-800"
+                                    )}>
                                       {t.date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                                     </p>
-                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">
+                                    <p className={cn(
+                                      "text-[10px] font-bold uppercase tracking-tight",
+                                      theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                                    )}>
                                       {t.date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
                                     </p>
                                   </td>
                                   <td className="px-6 py-4">
-                                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300">{t.description || '--'}</p>
+                                    <div className="flex items-center gap-2">
+                                      <p className={cn(
+                                        "text-sm font-bold transition-colors duration-300",
+                                        theme === 'dark' ? "text-slate-300" : "text-black"
+                                      )}>{t.description || '--'}</p>
+                                      {t.isAi && (
+                                        <span className="px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 text-[9px] font-black rounded-full flex items-center gap-0.5 border border-amber-200 dark:border-amber-800">
+                                          <Sparkles size={10} />
+                                          AI
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="px-6 py-4">
-                                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300">{t.category}</p>
+                                    <p className={cn(
+                                      "text-sm font-bold transition-colors duration-300",
+                                      theme === 'dark' ? "text-slate-300" : "text-black"
+                                    )}>{t.category}</p>
                                   </td>
                                   <td className="px-6 py-4">
-                                    <p className="text-sm font-bold text-slate-700 dark:text-slate-300">{t.mode}</p>
+                                    <p className={cn(
+                                      "text-sm font-bold transition-colors duration-300",
+                                      theme === 'dark' ? "text-slate-300" : "text-black"
+                                    )}>{t.mode}</p>
                                   </td>
                                   <td className="px-6 py-4">
                                     {t.images && t.images.length > 0 ? (
@@ -1812,7 +2208,7 @@ export default function App() {
                                           setPreviewRotation(0);
                                           setPreviewZoom(1);
                                         }}
-                                        className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 transition-colors group/bill"
+                                        className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 transition-colors group/bill cursor-pointer"
                                       >
                                         <Paperclip size={16} />
                                         <div className="text-left">
@@ -1830,7 +2226,8 @@ export default function App() {
                                     {formatCurrency(t.amount)}
                                   </td>
                                   <td className={cn(
-                                    "px-6 py-4 text-right font-black text-slate-800 dark:text-white",
+                                    "px-6 py-4 text-right font-black transition-colors duration-300",
+                                    theme === 'dark' ? "text-slate-100" : "text-black",
                                     formatCurrency(runningBalance).length > 10 ? "text-xs" : "text-sm"
                                   )}>
                                     <span>{formatCurrency(runningBalance)}</span>
@@ -1839,13 +2236,19 @@ export default function App() {
                                     <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                       <button 
                                         onClick={() => handleEditTransaction(t)}
-                                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-all"
+                                        className={cn(
+                                          "p-1.5 text-slate-400 rounded-lg transition-all cursor-pointer",
+                                          theme === 'dark' ? "hover:text-indigo-400 hover:bg-indigo-900/20" : "hover:text-indigo-600 hover:bg-indigo-50"
+                                        )}
                                       >
                                         <Pencil size={16} />
                                       </button>
                                       <button 
                                         onClick={() => handleDeleteTransaction(t.id)}
-                                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-all"
+                                        className={cn(
+                                          "p-1.5 text-slate-400 rounded-lg transition-all cursor-pointer",
+                                          theme === 'dark' ? "hover:text-rose-400 hover:bg-rose-900/20" : "hover:text-rose-600 hover:bg-rose-50"
+                                        )}
                                       >
                                         <Trash2 size={16} />
                                       </button>
@@ -1863,11 +2266,17 @@ export default function App() {
               </div>
 
               {/* Mobile Sticky Bottom Buttons */}
-              <div className="lg:hidden fixed bottom-0 left-0 right-0 p-4 bg-white/80 dark:bg-slate-900/80 backdrop-blur-lg border-t border-slate-100 dark:border-slate-800 z-40 space-y-3">
+              <div className={cn(
+                "lg:hidden fixed bottom-0 left-0 right-0 p-4 backdrop-blur-lg border-t z-40 space-y-3 transition-colors duration-300",
+                theme === 'dark' ? "bg-slate-900/80 border-slate-800" : "bg-white/80 border-slate-100"
+              )}>
                 <button
                   onClick={() => setShowAiWarning(true)}
                   disabled={isUploading}
-                  className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-2xl font-black shadow-lg shadow-indigo-100 dark:shadow-none transition-all active:scale-95"
+                  className={cn(
+                    "w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-black shadow-lg transition-all active:scale-95",
+                    theme === 'dark' ? "bg-indigo-900/20 text-indigo-400 shadow-none" : "bg-indigo-50 text-indigo-600 shadow-indigo-100"
+                  )}
                 >
                   {isUploading ? <Loader2 size={20} className="animate-spin" /> : <motion.div animate={{ rotate: [0, 15, -15, 0] }} transition={{ repeat: Infinity, duration: 2 }}><Upload size={20} /></motion.div>}
                   AI UPLOAD
@@ -1875,14 +2284,20 @@ export default function App() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => { setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-2xl font-black shadow-lg shadow-emerald-100 dark:shadow-none transition-all active:scale-95"
+                    className={cn(
+                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black shadow-lg transition-all active:scale-95",
+                      theme === 'dark' ? "bg-emerald-900/20 text-emerald-400 shadow-none" : "bg-emerald-50 text-emerald-600 shadow-emerald-100"
+                    )}
                   >
                     <Plus size={20} />
                     CASH IN
                   </button>
                   <button
                     onClick={() => { setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-2xl font-black shadow-lg shadow-rose-100 dark:shadow-none transition-all active:scale-95"
+                    className={cn(
+                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black shadow-lg transition-all active:scale-95",
+                      theme === 'dark' ? "bg-rose-900/20 text-rose-400 shadow-none" : "bg-rose-50 text-rose-600 shadow-rose-100"
+                    )}
                   >
                     <Minus size={20} />
                     CASH OUT
@@ -1899,18 +2314,30 @@ export default function App() {
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirmId && (
-          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[150] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-indigo-900/10"
+          )}>
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4"
+              className={cn(
+                "w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
-              <div className="w-16 h-16 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-full flex items-center justify-center mx-auto">
+              <div className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center mx-auto transition-colors duration-300",
+                theme === 'dark' ? "bg-rose-900/20 text-rose-400" : "bg-rose-50 text-rose-600"
+              )}>
                 <Trash2 size={32} />
               </div>
               <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">Delete Cashbook?</h3>
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-100" : "text-slate-800"
+                )}>Delete Cashbook?</h3>
                 <p className="text-slate-500 dark:text-slate-400 text-sm">
                   Are you sure you want to delete this book? This action cannot be undone and all transactions will be permanently lost.
                 </p>
@@ -1924,7 +2351,10 @@ export default function App() {
                 </button>
                 <button 
                   onClick={confirmDeleteBook}
-                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all"
+                  className={cn(
+                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
+                  )}
                 >
                   Delete
                 </button>
@@ -1937,18 +2367,30 @@ export default function App() {
       {/* Transaction Delete Confirmation Modal */}
       <AnimatePresence>
         {transactionToDelete && (
-          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[150] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-indigo-900/10"
+          )}>
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4"
+              className={cn(
+                "w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
-              <div className="w-16 h-16 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-full flex items-center justify-center mx-auto">
+              <div className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center mx-auto transition-colors duration-300",
+                theme === 'dark' ? "bg-rose-900/20 text-rose-400" : "bg-rose-50 text-rose-600"
+              )}>
                 <Trash2 size={32} />
               </div>
               <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">Delete Entry?</h3>
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-100" : "text-slate-800"
+                )}>Delete Entry?</h3>
                 <p className="text-slate-500 dark:text-slate-400 text-sm">
                   Are you sure you want to delete this entry? Once deleted, it cannot be recovered.
                 </p>
@@ -1962,7 +2404,10 @@ export default function App() {
                 </button>
                 <button 
                   onClick={confirmDeleteTransaction}
-                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all"
+                  className={cn(
+                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
+                  )}
                 >
                   Delete
                 </button>
@@ -1975,19 +2420,31 @@ export default function App() {
       {/* AI Upload Warning Modal */}
       <AnimatePresence>
         {showAiWarning && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[120] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-indigo-900/10"
+          )}>
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4"
+              className={cn(
+                "w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
               <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mx-auto">
                 <Upload size={32} />
               </div>
               <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">AI Upload Information</h3>
-                <p className="text-slate-500 dark:text-slate-400 text-sm">
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>AI Upload Information</h3>
+                <p className={cn(
+                  "text-sm transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-400" : "text-black"
+                )}>
                   You can upload up to <span className="font-bold text-indigo-600">5 images</span> at a time. 
                   Please note that AI can make mistakes, so verify the entries after processing.
                 </p>
@@ -2001,7 +2458,10 @@ export default function App() {
                 </button>
                 <button 
                   onClick={() => { setShowAiWarning(false); setShowDropZone(true); }}
-                  className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none transition-all"
+                  className={cn(
+                    "flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
+                  )}
                 >
                   Proceed
                 </button>
@@ -2014,15 +2474,24 @@ export default function App() {
       {/* AI Drop Zone Modal */}
       <AnimatePresence>
         {showDropZone && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+          <div className={cn(
+            "fixed inset-0 z-[120] flex items-center justify-center p-4 backdrop-blur-md transition-colors duration-300",
+            theme === 'dark' ? "bg-black/70" : "bg-indigo-900/20"
+          )}>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-8 shadow-2xl space-y-6"
+              className={cn(
+                "w-full max-w-md rounded-3xl p-8 shadow-2xl space-y-6 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
               <div className="flex items-center justify-between">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">Drop Images</h3>
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Drop Images</h3>
                 <button 
                   onClick={() => setShowDropZone(false)}
                   className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
@@ -2064,15 +2533,24 @@ export default function App() {
       {/* Create Book Modal */}
       <AnimatePresence>
         {isCreatingBook && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-slate-900/40"
+          )}>
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 shadow-2xl"
+              className={cn(
+                "w-full max-w-md rounded-3xl p-6 shadow-2xl transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">Create New Book</h3>
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Create New Book</h3>
                 <button onClick={() => setIsCreatingBook(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
                   <X size={20} className="text-slate-400" />
                 </button>
@@ -2086,7 +2564,10 @@ export default function App() {
                     placeholder="e.g., Personal, Business"
                     value={newBookName}
                     onChange={(e) => setNewBookName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    className={cn(
+                      "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-indigo-500 outline-none transition-all",
+                      theme === 'dark' ? "bg-slate-800 border-slate-800 text-white" : "bg-slate-50 border-slate-200 text-black"
+                    )}
                   />
                 </div>
                 <div className="space-y-1">
@@ -2095,12 +2576,18 @@ export default function App() {
                     type="text"
                     disabled
                     value={new Date().toLocaleDateString()}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/50 text-slate-400 outline-none cursor-not-allowed"
+                    className={cn(
+                      "w-full px-4 py-3 rounded-xl border outline-none cursor-not-allowed",
+                      theme === 'dark' ? "bg-slate-800/50 border-slate-800 text-slate-500" : "bg-slate-100 border-slate-200 text-slate-400"
+                    )}
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none transition-all"
+                  className={cn(
+                    "w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
+                  )}
                 >
                   Create Book
                 </button>
@@ -2113,15 +2600,24 @@ export default function App() {
       {/* Edit Book Modal */}
       <AnimatePresence>
         {isEditingBook && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-slate-900/40"
+          )}>
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 shadow-2xl"
+              className={cn(
+                "w-full max-w-md rounded-3xl p-6 shadow-2xl transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">Edit Book Name</h3>
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Edit Book Name</h3>
                 <button onClick={() => setIsEditingBook(null)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
                   <X size={20} className="text-slate-400" />
                 </button>
@@ -2134,12 +2630,18 @@ export default function App() {
                     type="text"
                     value={editBookName}
                     onChange={(e) => setEditBookName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    className={cn(
+                      "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-indigo-500 outline-none transition-all",
+                      theme === 'dark' ? "bg-slate-800 border-slate-800 text-white" : "bg-slate-50 border-slate-200 text-black"
+                    )}
                   />
                 </div>
                 <button
                   type="submit"
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none transition-all"
+                  className={cn(
+                    "w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
+                  )}
                 >
                   Save Changes
                 </button>
@@ -2152,16 +2654,28 @@ export default function App() {
       {/* Profile Settings Modal */}
       <AnimatePresence>
         {isEditingName && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-slate-900/40"
+          )}>
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 shadow-2xl"
+              className={cn(
+                "w-full max-w-md rounded-3xl p-6 shadow-2xl transition-colors duration-300",
+                theme === 'dark' ? "bg-slate-900" : "bg-white"
+              )}
             >
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xl font-bold text-slate-800 dark:text-white">Profile Settings</h3>
-                <button onClick={() => setIsEditingName(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Profile Settings</h3>
+                <button onClick={() => setIsEditingName(false)} className={cn(
+                  "p-2 rounded-full transition-colors",
+                  theme === 'dark' ? "hover:bg-slate-800" : "hover:bg-slate-100"
+                )}>
                   <X size={20} className="text-slate-400" />
                 </button>
               </div>
@@ -2173,12 +2687,18 @@ export default function App() {
                     type="text"
                     value={userName}
                     onChange={(e) => setUserName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                    className={cn(
+                      "w-full px-4 py-3 rounded-xl border focus:ring-2 focus:ring-indigo-500 outline-none transition-all",
+                      theme === 'dark' ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 bg-slate-50 text-black"
+                    )}
                   />
                 </div>
                 <button
                   onClick={() => setIsEditingName(false)}
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-100 dark:shadow-none transition-all"
+                  className={cn(
+                    "w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
+                  )}
                 >
                   Save Changes
                 </button>
@@ -2191,33 +2711,51 @@ export default function App() {
       {/* Transaction Form Modal */}
       <AnimatePresence>
         {showForm && (
-          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className={cn(
+            "fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-indigo-900/10"
+          )}>
             <motion.div
               initial={{ opacity: 0, y: 100 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 100 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden"
+              className={cn(
+                "w-full max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
             >
               {/* Modal Header */}
-              <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-100 dark:border-slate-800">
-                <h3 className="text-xl sm:text-2xl font-bold text-slate-800 dark:text-white">
+              <div className={cn(
+                "flex items-center justify-between p-4 sm:p-6 border-b transition-colors duration-300",
+                theme === 'dark' ? "border-slate-800" : "border-slate-100"
+              )}>
+                <h3 className={cn(
+                  "text-xl sm:text-2xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-slate-800"
+                )}>
                   {showForm === 'in' ? 'Add Cash In' : 'Add Cash Out'}
                 </h3>
-                <button onClick={resetForm} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors">
+                <button onClick={resetForm} className={cn(
+                  "p-2 rounded-full transition-colors",
+                  theme === 'dark' ? "hover:bg-slate-800" : "hover:bg-slate-100"
+                )}>
                   <X size={24} className="text-slate-400" />
                 </button>
               </div>
 
               <div className="p-4 sm:p-6 space-y-4 sm:space-y-6 max-h-[80vh] overflow-y-auto no-scrollbar">
                 {/* Type Tabs */}
-                <div className="bg-slate-100 dark:bg-slate-800 p-1 rounded-xl flex gap-1">
+                <div className={cn(
+                  "p-1 rounded-xl flex gap-1 transition-colors duration-300",
+                  theme === 'dark' ? "bg-slate-800" : "bg-slate-100"
+                )}>
                   <button
                     onClick={() => setShowForm('in')}
                     className={cn(
                       "flex-1 py-2 sm:py-3 rounded-lg font-bold transition-all text-xs sm:text-sm",
                       showForm === 'in' 
-                        ? "bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-sm" 
-                        : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-700/50"
+                        ? (theme === 'dark' ? "bg-slate-700 text-emerald-400 shadow-sm" : "bg-white text-emerald-600 shadow-sm")
+                        : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
                     )}
                   >
                     CASH IN
@@ -2227,8 +2765,8 @@ export default function App() {
                     className={cn(
                       "flex-1 py-2 sm:py-3 rounded-lg font-bold transition-all text-xs sm:text-sm",
                       showForm === 'out' 
-                        ? "bg-white dark:bg-slate-700 text-rose-600 dark:text-rose-400 shadow-sm" 
-                        : "text-slate-500 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-700/50"
+                        ? (theme === 'dark' ? "bg-slate-700 text-rose-400 shadow-sm" : "bg-white text-rose-600 shadow-sm")
+                        : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
                     )}
                   >
                     CASH OUT
@@ -2243,7 +2781,10 @@ export default function App() {
                         type="datetime-local"
                         value={transactionDate}
                         onChange={(e) => setTransactionDate(e.target.value)}
-                        className="w-full h-[52px] px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white text-sm font-medium"
+                        className={cn(
+                          "w-full h-[52px] px-4 py-3 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium transition-colors duration-300",
+                          theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-50 text-black"
+                        )}
                       />
                     </div>
 
@@ -2256,7 +2797,10 @@ export default function App() {
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
                         placeholder="0.00"
-                        className="w-full h-[52px] px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium dark:text-white"
+                        className={cn(
+                          "w-full h-[52px] px-4 py-3 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium transition-colors duration-300",
+                          theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-50 text-black"
+                        )}
                       />
                     </div>
                   </div>
@@ -2268,7 +2812,10 @@ export default function App() {
                       onChange={(e) => setDescription(e.target.value)}
                       placeholder="Enter transaction details"
                       rows={2}
-                      className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white text-sm font-medium resize-none"
+                      className={cn(
+                        "w-full px-4 py-3 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium resize-none transition-colors duration-300",
+                        theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-50 text-black"
+                      )}
                     />
                   </div>
 
@@ -2280,7 +2827,10 @@ export default function App() {
                           <select
                             value={category}
                             onChange={(e) => setCategory(e.target.value)}
-                            className="w-full h-[52px] px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white text-sm font-medium appearance-none"
+                            className={cn(
+                              "w-full h-[52px] px-4 py-3 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium appearance-none transition-colors duration-300",
+                              theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-50 text-black"
+                            )}
                           >
                             {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                           </select>
@@ -2292,7 +2842,10 @@ export default function App() {
                             placeholder="Enter custom category"
                             value={customCategory}
                             onChange={(e) => setCustomCategory(e.target.value)}
-                            className="w-full h-[52px] px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-indigo-100 dark:border-indigo-900/30 focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white text-sm"
+                            className={cn(
+                              "w-full h-[52px] px-4 py-3 rounded-xl border focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all",
+                              theme === 'dark' ? "bg-slate-800 border-indigo-900/30 text-white" : "bg-slate-50 border-indigo-100 text-black"
+                            )}
                           />
                         )}
                       </div>
@@ -2305,7 +2858,10 @@ export default function App() {
                           <select
                             value={mode}
                             onChange={(e) => setMode(e.target.value)}
-                            className="w-full h-[52px] px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white text-sm font-medium appearance-none"
+                            className={cn(
+                              "w-full h-[52px] px-4 py-3 rounded-xl border-none focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium appearance-none transition-colors duration-300",
+                              theme === 'dark' ? "bg-slate-800 text-white" : "bg-slate-50 text-black"
+                            )}
                           >
                             {MODES.map(m => <option key={m} value={m}>{m}</option>)}
                           </select>
@@ -2317,7 +2873,10 @@ export default function App() {
                             placeholder="Enter custom mode"
                             value={customMode}
                             onChange={(e) => setCustomMode(e.target.value)}
-                            className="w-full h-[52px] px-4 py-3 bg-slate-50 dark:bg-slate-800 rounded-xl border border-indigo-100 dark:border-indigo-900/30 focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white text-sm"
+                            className={cn(
+                              "w-full h-[52px] px-4 py-3 rounded-xl border focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all",
+                              theme === 'dark' ? "bg-slate-800 border-indigo-900/30 text-white" : "bg-slate-50 border-indigo-100 text-black"
+                            )}
                           />
                         )}
                       </div>
@@ -2345,7 +2904,10 @@ export default function App() {
                               <button 
                                 type="button"
                                 onClick={() => removeImage(i)}
-                                className="absolute -top-2 -right-2 p-1 bg-rose-600 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                                className={cn(
+                                  "absolute -top-2 -right-2 p-1 bg-rose-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity",
+                                  theme === 'dark' ? "shadow-none" : "shadow-lg"
+                                )}
                               >
                                 <X size={12} />
                               </button>
@@ -2355,7 +2917,10 @@ export default function App() {
                             <button 
                               type="button"
                               onClick={() => multiFileInputRef.current?.click()}
-                              className="w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all"
+                              className={cn(
+                                "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center border-2 border-dashed rounded-xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all",
+                                theme === 'dark' ? "border-slate-800" : "border-slate-200"
+                              )}
                             >
                               <Plus size={24} />
                             </button>
@@ -2366,9 +2931,15 @@ export default function App() {
                       {selectedImages.length === 0 && (
                         <div 
                           onClick={() => multiFileInputRef.current?.click()}
-                          className="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-6 flex flex-col items-center justify-center gap-2 hover:border-indigo-300 dark:hover:border-indigo-500 transition-all cursor-pointer group"
+                          className={cn(
+                            "border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 hover:border-indigo-300 transition-all cursor-pointer group",
+                            theme === 'dark' ? "border-slate-800 hover:border-indigo-500" : "border-slate-200"
+                          )}
                         >
-                          <div className="p-2 bg-slate-50 dark:bg-slate-800 rounded-full text-slate-400 group-hover:text-indigo-500 transition-colors">
+                          <div className={cn(
+                            "p-2 rounded-full text-slate-400 group-hover:text-indigo-500 transition-colors",
+                            theme === 'dark' ? "bg-slate-800" : "bg-slate-50"
+                          )}>
                             <Upload size={24} />
                           </div>
                           <p className="text-[10px] font-bold text-slate-400 group-hover:text-indigo-500 transition-colors">
@@ -2398,8 +2969,10 @@ export default function App() {
                     <button
                       type="submit"
                       className={cn(
-                        "flex-1 py-3 rounded-xl font-bold text-white shadow-lg transition-all active:scale-95 text-sm",
-                        showForm === 'in' ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100 dark:shadow-none" : "bg-rose-600 hover:bg-rose-700 shadow-rose-100 dark:shadow-none"
+                        "flex-1 py-3 rounded-xl font-bold text-white transition-all active:scale-95 text-sm",
+                        showForm === 'in' 
+                          ? (theme === 'dark' ? "bg-emerald-600 hover:bg-emerald-700 shadow-none" : "bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100")
+                          : (theme === 'dark' ? "bg-rose-600 hover:bg-rose-700 shadow-none" : "bg-rose-600 hover:bg-rose-700 shadow-lg shadow-rose-100")
                       )}
                     >
                       Save
@@ -2566,7 +3139,9 @@ export default function App() {
                     }}
                     className={cn(
                       "w-16 h-16 rounded-lg overflow-hidden border-2 transition-all shrink-0",
-                      previewIndex === i ? "border-indigo-500 scale-110 shadow-lg shadow-indigo-500/20" : "border-transparent opacity-50 hover:opacity-100"
+                      previewIndex === i 
+                        ? (theme === 'dark' ? "border-indigo-500 scale-110 shadow-none" : "border-indigo-500 scale-110 shadow-lg shadow-indigo-500/20") 
+                        : "border-transparent opacity-50 hover:opacity-100"
                     )}
                   >
                     <img src={img} alt="thumb" className="w-full h-full object-cover" />
@@ -2580,7 +3155,10 @@ export default function App() {
       {/* Report Generation Overlay */}
       <AnimatePresence>
         {reportLoading && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-white/80 dark:bg-slate-900/80 backdrop-blur-md">
+          <div className={cn(
+            "fixed inset-0 z-[300] flex items-center justify-center backdrop-blur-md transition-colors duration-300",
+            theme === 'dark' ? "bg-black/80" : "bg-white/80"
+          )}>
             <div className="text-center space-y-6 max-w-xs w-full px-6">
               <div className="relative inline-block">
                 <svg className="w-32 h-32 transform -rotate-90">
@@ -2591,7 +3169,7 @@ export default function App() {
                     stroke="currentColor"
                     strokeWidth="8"
                     fill="transparent"
-                    className="text-slate-100 dark:text-slate-800"
+                    className={theme === 'dark' ? "text-slate-800" : "text-slate-100"}
                   />
                   <motion.circle
                     cx="64"
@@ -2607,15 +3185,24 @@ export default function App() {
                   />
                 </svg>
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-2xl font-black text-slate-800 dark:text-white">{reportLoading.progress}%</span>
+                  <span className={cn(
+                    "text-2xl font-black transition-colors duration-300",
+                    theme === 'dark' ? "text-white" : "text-black"
+                  )}>{reportLoading.progress}%</span>
                 </div>
               </div>
               
               <div className="space-y-2">
-                <h3 className="text-xl font-black text-slate-800 dark:text-white">
+                <h3 className={cn(
+                  "text-xl font-black transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>
                   Exporting your {reportLoading.type.toUpperCase()} report
                 </h3>
-                <p className="text-slate-500 dark:text-slate-400 font-medium">
+                <p className={cn(
+                  "font-medium transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-400" : "text-slate-600"
+                )}>
                   Please wait while we prepare your file...
                 </p>
               </div>
@@ -2631,7 +3218,10 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100 dark:border-slate-800"
+              className={cn(
+                "rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border transition-colors duration-300",
+                theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
+              )}
             >
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-indigo-600 text-white">
                 <div className="flex items-center gap-3">
@@ -2653,13 +3243,19 @@ export default function App() {
 
               <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
                 <div className="space-y-4">
-                  <label className="text-sm font-black text-slate-400 uppercase tracking-widest">Ask anything about the app</label>
+                  <label className={cn(
+                    "text-sm font-black uppercase tracking-widest transition-colors duration-300",
+                    theme === 'dark' ? "text-slate-500" : "text-black"
+                  )}>Ask anything about the app</label>
                   <div className="relative">
                     <textarea
                       value={helpQuery}
                       onChange={(e) => setHelpQuery(e.target.value)}
                       placeholder="How do I add a transaction? How to export reports?"
-                      className="w-full bg-slate-50 dark:bg-slate-800 border-2 border-slate-100 dark:border-slate-700 rounded-2xl p-4 text-slate-800 dark:text-white outline-none focus:border-indigo-500 transition-all resize-none h-32"
+                      className={cn(
+                        "w-full border-2 rounded-2xl p-4 outline-none focus:border-indigo-500 transition-all resize-none h-32",
+                        theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-white" : "bg-slate-50 border-slate-100 text-black"
+                      )}
                     />
                     <button
                       onClick={handleAskAi}
@@ -2682,7 +3278,10 @@ export default function App() {
                       <div className="w-2 h-2 bg-indigo-600 rounded-full animate-pulse" />
                       <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">AI Response</span>
                     </div>
-                    <div className="text-slate-700 dark:text-slate-300 text-sm leading-relaxed prose prose-slate dark:prose-invert max-w-none">
+                    <div className={cn(
+                      "text-sm leading-relaxed prose prose-slate dark:prose-invert max-w-none transition-colors duration-300",
+                      theme === 'dark' ? "text-slate-300" : "text-black"
+                    )}>
                       <ReactMarkdown>{helpResponse}</ReactMarkdown>
                     </div>
                   </motion.div>
@@ -2698,6 +3297,219 @@ export default function App() {
                     <ArrowRight size={14} />
                   </a>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isSubmitting && (
+          <div className={cn(
+            "fixed inset-0 z-[200] flex items-center justify-center p-4 backdrop-blur-md transition-colors duration-300",
+            theme === 'dark' ? "bg-black/80" : "bg-slate-900/40"
+          )}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className={cn(
+                "rounded-3xl p-8 shadow-2xl text-center space-y-6 max-w-xs w-full border transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100"
+              )}
+            >
+              <div className="relative w-20 h-20 mx-auto">
+                <div className={cn(
+                  "absolute inset-0 border-4 rounded-full transition-colors duration-300",
+                  theme === 'dark' ? "border-indigo-900/30" : "border-indigo-100"
+                )} />
+                <motion.div 
+                  animate={{ rotate: 360 }}
+                  transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+                  className="absolute inset-0 border-4 border-indigo-600 border-t-transparent rounded-full"
+                />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Sparkles className="text-indigo-600 animate-pulse" size={32} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <h3 className={cn(
+                  "text-xl font-black transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>{submittingMessage}</h3>
+                <p className={cn(
+                  "text-sm font-medium transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-400" : "text-slate-600"
+                )}>Please wait a moment...</p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Bulk Transaction Delete Confirmation Modal */}
+      <AnimatePresence>
+        {showBulkTransactionDeleteConfirm && (
+          <div className={cn(
+            "fixed inset-0 z-[150] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-slate-900/40"
+          )}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className={cn(
+                "w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
+            >
+              <div className="w-16 h-16 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Delete Selected Entries?</h3>
+                <p className={cn(
+                  "text-sm transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-400" : "text-black"
+                )}>
+                  Are you sure you want to delete <span className="font-bold text-rose-600">{selectedTransactions.size}</span> entries? This action cannot be undone.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowBulkTransactionDeleteConfirm(false)}
+                  className={cn(
+                    "flex-1 py-3 border rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "border-slate-800 text-slate-400 hover:bg-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  )}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleBulkDelete}
+                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all"
+                >
+                  Delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Bulk Delete Confirmation Modal */}
+      <AnimatePresence>
+        {showBulkDeleteConfirm && (
+          <div className={cn(
+            "fixed inset-0 z-[150] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-slate-900/40"
+          )}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className={cn(
+                "w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
+            >
+              <div className="w-16 h-16 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Delete Selected Books?</h3>
+                <p className={cn(
+                  "text-sm transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-400" : "text-black"
+                )}>
+                  Are you sure you want to delete <span className="font-bold text-rose-600">{selectedBooks.size}</span> cashbooks? This action cannot be undone.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowBulkDeleteConfirm(false)}
+                  className={cn(
+                    "flex-1 py-3 border rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "border-slate-800 text-slate-400 hover:bg-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  )}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleBulkDeleteBooks}
+                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all"
+                >
+                  Delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Exit App Confirmation Modal */}
+      <AnimatePresence>
+        {showExitConfirm && (
+          <div className={cn(
+            "fixed inset-0 z-[200] flex items-center justify-center p-4 backdrop-blur-sm transition-colors duration-300",
+            theme === 'dark' ? "bg-black/60" : "bg-indigo-900/10"
+          )}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className={cn(
+                "w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center space-y-4 transition-colors duration-300",
+                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+              )}
+            >
+              <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mx-auto">
+                <LogOut size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className={cn(
+                  "text-xl font-bold transition-colors duration-300",
+                  theme === 'dark' ? "text-white" : "text-black"
+                )}>Exit App?</h3>
+                <p className={cn(
+                  "text-sm transition-colors duration-300",
+                  theme === 'dark' ? "text-slate-400" : "text-black"
+                )}>
+                  Do you want to exit the application?
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowExitConfirm(false)}
+                  className={cn(
+                    "flex-1 py-3 border rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "border-slate-800 text-slate-400 hover:bg-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  )}
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    // In a real app, this might close the window or navigate away
+                    // Here we'll just sign out or similar, or just close the modal
+                    // The user specifically asked for "Exit" button
+                    window.close(); 
+                    // Fallback if window.close() is blocked
+                    setShowExitConfirm(false);
+                  }}
+                  className={cn(
+                    "flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all",
+                    theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
+                  )}
+                >
+                  Exit
+                </button>
               </div>
             </motion.div>
           </div>
