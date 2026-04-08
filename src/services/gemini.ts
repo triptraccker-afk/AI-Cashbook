@@ -1,6 +1,13 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+export const getApiKey = () => {
+  // Priority: Environment Variables -> User Provided Key (Fallback)
+  return process.env.GEMINI_API_KEY || 
+         import.meta.env.VITE_GEMINI_API_KEY || 
+         "AIzaSyCrSRi-asYWLNcWydrvnV5fuPxNlZALWmQ"; // User provided fallback
+};
+
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 export interface TransactionData {
   amount: number;
