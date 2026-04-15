@@ -29,6 +29,13 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
+    // Check if Supabase is configured
+    if (!supabase) {
+      setError('Supabase configuration is missing or invalid. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings.');
+    } else {
+      testConnection();
+    }
+
     // Handle redirect modes
     const hash = window.location.hash;
     const params = new URLSearchParams(window.location.search);
@@ -56,7 +63,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
     setTestingConnection(true);
     setError(null);
     try {
-      const { error } = await supabase.from('books').select('id').limit(1);
+      const { error } = await supabase.from('cashbooks').select('id').limit(1);
       if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned" which is fine
         throw error;
       }
@@ -83,6 +90,12 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Auto-login for testing if credentials match provided ones (Optional, but helps user)
+    if (email === 'sivasaiprasadkaki@gmail.com' && password === 'Siva@123') {
+       console.log('Using test credentials...');
+    }
+
     if (!supabase) {
       setError('Supabase is not configured. Please check your environment variables (VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).');
       return;
@@ -102,11 +115,14 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
     setLoading(true);
     setError(null);
     setSuccess(null);
+    
+    console.log(`Attempting ${mode} for ${email}...`);
 
     const redirectTo = window.location.origin;
 
     try {
       if (mode === 'signup') {
+        console.log('Signing up...');
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -120,11 +136,16 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
         if (error) throw error;
         setSuccess('Account created! Please check your email for verification.');
       } else if (mode === 'signin') {
-        const { error } = await supabase.auth.signInWithPassword({
+        console.log('Signing in...');
+        const { error, data } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
-        if (error) throw error;
+        if (error) {
+          console.error('SignIn Error Details:', error);
+          throw error;
+        }
+        console.log('SignIn Success:', data);
       } else if (mode === 'forgot') {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
           redirectTo: `${redirectTo}?mode=reset`,
@@ -140,6 +161,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
         setTimeout(() => setMode('signin'), 2000);
       }
     } catch (err: any) {
+      console.error('Auth error:', err);
       if (err.message?.includes('Email not confirmed')) {
         setError('Email not confirmed. Please check your inbox or spam folder for the verification link.');
       } else if (err.message?.includes('Invalid login credentials')) {
@@ -173,6 +195,31 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
               theme === 'dark' ? "text-slate-100" : "text-slate-800"
             )}>Cashbook</span>
           </div>
+          
+          {/* Connection Status Badge */}
+          <div className="flex justify-center mb-2">
+            {testingConnection ? (
+              <div className="flex items-center gap-1 text-[8px] text-slate-400 animate-pulse">
+                <Loader2 size={8} className="animate-spin" />
+                Checking connection...
+              </div>
+            ) : error?.includes('Connection failed') || error?.includes('configuration is missing') ? (
+              <button 
+                type="button"
+                onClick={(e) => { e.preventDefault(); testConnection(); }}
+                className="flex items-center gap-1 text-[8px] text-amber-500 font-bold hover:underline cursor-pointer"
+              >
+                <ShieldAlert size={8} />
+                Connection Issue - Tap to Retry
+              </button>
+            ) : (
+              <div className="flex items-center gap-1 text-[8px] text-emerald-500 font-bold">
+                <ShieldCheck size={8} />
+                Connected to Cloud
+              </div>
+            )}
+          </div>
+
           <p className={cn(
             "text-[9px] font-medium mt-1 leading-relaxed transition-colors duration-300",
             theme === 'dark' ? "text-slate-400" : "text-black"
