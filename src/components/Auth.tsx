@@ -29,13 +29,6 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
-    // Check if Supabase is configured
-    if (!supabase) {
-      setError('Supabase configuration is missing or invalid. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your settings.');
-    } else {
-      testConnection();
-    }
-
     // Handle redirect modes
     const hash = window.location.hash;
     const params = new URLSearchParams(window.location.search);
@@ -56,20 +49,12 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
   const [testingConnection, setTestingConnection] = useState(false);
 
   const testConnection = async () => {
-    if (!supabase) {
-      setError('Supabase is not configured.');
-      return;
-    }
+    if (!supabase) return;
     setTestingConnection(true);
-    setError(null);
     try {
-      const { error } = await supabase.from('cashbooks').select('id').limit(1);
-      if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned" which is fine
-        throw error;
-      }
-      setSuccess('Connection to Supabase successful!');
+      await supabase.from('cashbooks').select('id').limit(1);
     } catch (err: any) {
-      setError(`Connection failed: ${err.message}`);
+      console.error('Connection check failed:', err);
     } finally {
       setTestingConnection(false);
     }
@@ -189,35 +174,11 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
       >
         <div className="text-center mb-4">
           <div className="flex items-center justify-center gap-1.5 mb-1 font-outfit">
-            <span className="text-[24px] font-black text-[#3b82f6] dark:text-blue-400 tracking-tight">AI</span>
+            <span className="text-[24px] font-black text-[#3b82f6] dark:text-blue-400 tracking-tight">Track</span>
             <span className={cn(
               "text-[24px] font-black tracking-tight transition-colors duration-300",
               theme === 'dark' ? "text-slate-100" : "text-slate-800"
-            )}>Cashbook</span>
-          </div>
-          
-          {/* Connection Status Badge */}
-          <div className="flex justify-center mb-2">
-            {testingConnection ? (
-              <div className="flex items-center gap-1 text-[8px] text-slate-400 animate-pulse">
-                <Loader2 size={8} className="animate-spin" />
-                Checking connection...
-              </div>
-            ) : error?.includes('Connection failed') || error?.includes('configuration is missing') ? (
-              <button 
-                type="button"
-                onClick={(e) => { e.preventDefault(); testConnection(); }}
-                className="flex items-center gap-1 text-[8px] text-amber-500 font-bold hover:underline cursor-pointer"
-              >
-                <ShieldAlert size={8} />
-                Connection Issue - Tap to Retry
-              </button>
-            ) : (
-              <div className="flex items-center gap-1 text-[8px] text-emerald-500 font-bold">
-                <ShieldCheck size={8} />
-                Connected to Cloud
-              </div>
-            )}
+            )}>Book</span>
           </div>
 
           <p className={cn(
