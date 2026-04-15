@@ -4,7 +4,7 @@ export const getApiKey = () => {
   // Priority: Environment Variables -> User Provided Key (Fallback)
   return process.env.GEMINI_API_KEY || 
          import.meta.env.VITE_GEMINI_API_KEY || 
-         "AIzaSyCrSRi-asYWLNcWydrvnV5fuPxNlZALWmQ"; // User provided fallback
+         "AIzaSyC5feK4rHwjBxFMFSS_k7V3-9LpGxm6VlY"; // Updated user provided fallback
 };
 
 const ai = new GoogleGenAI({ apiKey: getApiKey() });
