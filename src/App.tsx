@@ -70,6 +70,7 @@ interface Transaction {
   mode: string;
   date: Date;
   images?: string[];
+  imageLayout?: 'split' | 'merge';
   isAi?: boolean;
 }
 
@@ -122,6 +123,7 @@ export default function App() {
   const [selectedTransactions, setSelectedTransactions] = useState<Set<string>>(new Set());
   const [selectedBooks, setSelectedBooks] = useState<Set<string>>(new Set());
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [deleteTimer, setDeleteTimer] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('theme');
@@ -132,6 +134,17 @@ export default function App() {
   });
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const bookLongPressTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Delete Timer Effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (deleteTimer > 0) {
+      interval = setInterval(() => {
+        setDeleteTimer((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [deleteTimer]);
 
   const handleTransactionPress = (id: string) => {
     if (selectedTransactions.size > 0) {
@@ -247,6 +260,20 @@ export default function App() {
     };
   }, [activeBookId]);
 
+  const moveImage = (index: number, direction: 'up' | 'down') => {
+    const newImages = [...selectedImages];
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= newImages.length) return;
+    
+    const temp = newImages[index];
+    newImages[index] = newImages[newIndex];
+    newImages[newIndex] = temp;
+    setSelectedImages(newImages);
+  };
+
+  const removeImage = (index: number) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [previewImages, setPreviewImages] = useState<string[] | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -296,6 +323,7 @@ export default function App() {
 
   const [transactionDate, setTransactionDate] = useState(safeToDateTimeLocal(new Date()));
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [imageLayout, setImageLayout] = useState<'split' | 'merge'>('split');
 
   const CATEGORIES = ['Food', 'Travel', 'Advance', 'Shopping', 'Custom'];
   const MODES = ['Card', 'UPI', 'Cash', 'Custom'];
@@ -569,7 +597,7 @@ export default function App() {
         model: "gemini-3-flash-preview",
         contents: helpQuery,
         config: {
-          systemInstruction: "You are a helpful assistant for 'AI Cashbook', a financial management app. The app allows users to create multiple cashbooks, add transactions (Cash In/Out), upload receipt images for AI detection (using Gemini), and export reports in Excel/PDF. Users can also filter transactions by type, category, and duration. Answer the user's question about how to use the app or general financial advice within the context of this app. Keep it concise.",
+          systemInstruction: "You are a helpful assistant for 'Track Book', a financial management app. The app allows users to create multiple books, add transactions (Cash In/Out), upload receipt images for AI detection (using Gemini), and export reports in Excel/PDF. Users can also filter transactions by type, category, and duration. Answer the user's question about how to use the app or general financial advice within the context of this app. Keep it concise.",
         },
       });
       setHelpResponse(response.text || "I'm sorry, I couldn't generate a response.");
@@ -583,6 +611,7 @@ export default function App() {
 
   const handleDeleteBook = (id: string) => {
     setDeleteConfirmId(id);
+    setDeleteTimer(5);
   };
 
   const confirmDeleteBook = async () => {
@@ -648,7 +677,8 @@ export default function App() {
         category: finalCategory || 'General',
         mode: finalMode,
         date: dateObj,
-        images: selectedImages.length > 0 ? selectedImages : editingTransaction.images
+        images: selectedImages.length > 0 ? selectedImages : editingTransaction.images,
+        imageLayout: imageLayout
       };
 
       setBooks(books.map(b => 
@@ -710,7 +740,8 @@ export default function App() {
         category: finalCategory || 'General',
         mode: finalMode,
         date: dateObj,
-        images: selectedImages.length > 0 ? selectedImages : undefined
+        images: selectedImages.length > 0 ? selectedImages : undefined,
+        imageLayout: imageLayout
       };
 
       // Optimistic update
@@ -772,6 +803,7 @@ export default function App() {
 
   const handleDeleteTransaction = (id: string) => {
     setTransactionToDelete(id);
+    setDeleteTimer(5);
   };
 
   const confirmDeleteTransaction = async () => {
@@ -839,6 +871,7 @@ export default function App() {
     if (!MODES.includes(t.mode)) setCustomMode(t.mode);
     setTransactionDate(safeToDateTimeLocal(t.date));
     setSelectedImages(t.images || []);
+    setImageLayout(t.imageLayout || 'split');
   };
 
   const toggleSelectTransaction = (id: string) => {
@@ -895,10 +928,6 @@ export default function App() {
     });
   };
 
-  const removeImage = (index: number) => {
-    setSelectedImages(prev => prev.filter((_, i) => i !== index));
-  };
-
   const exportToExcel = async () => {
     if (!activeBook) return;
     setReportLoading({ type: 'excel', progress: 0 });
@@ -909,6 +938,25 @@ export default function App() {
       await new Promise(r => setTimeout(r, 100));
     }
 
+    // Calculate PDF page numbers for reference
+    let currentPage = 1;
+    const transactionPageMap = new Map<string, string>();
+    
+    const transactionsWithImages = filteredTransactions.filter(t => t.images && t.images.length > 0);
+    for (const t of transactionsWithImages) {
+      const layout = t.imageLayout || 'split';
+      const imageCount = t.images?.length || 0;
+      const pagesUsed = layout === 'merge' ? Math.ceil(imageCount / 2) : imageCount;
+      
+      if (pagesUsed === 1) {
+        transactionPageMap.set(t.id, `Refer Page Number ${currentPage}`);
+      } else {
+        transactionPageMap.set(t.id, `Refer Page Number ${currentPage} to ${currentPage + pagesUsed - 1}`);
+      }
+      
+      currentPage += pagesUsed;
+    }
+
     const data = filteredTransactions.map(t => ({
       Date: t.date.toLocaleDateString('en-IN'),
       Details: t.description,
@@ -916,6 +964,7 @@ export default function App() {
       Mode: t.mode,
       'Cash In': t.type === 'in' ? t.amount : 0,
       'Cash Out': t.type === 'out' ? t.amount : 0,
+      'Reference': transactionPageMap.get(t.id) || '-'
     }));
 
     // Add totals and balance as per user reference
@@ -928,9 +977,14 @@ export default function App() {
     // Add summary rows
     XLSX.utils.sheet_add_aoa(ws, [
       [],
-      ['', '', '', 'TOTAL', totalIn, totalOut],
-      ['', '', '', 'BALANCE', balance]
+      ['', '', '', '', totalIn, totalOut],
+      ['', '', '', '', balance]
     ], { origin: -1 });
+
+    // Update summary labels to align with the new column structure
+    const lastRow = XLSX.utils.decode_range(ws['!ref'] || 'A1').e.r;
+    ws[XLSX.utils.encode_cell({ r: lastRow - 1, c: 3 })] = { v: 'TOTAL', t: 's' };
+    ws[XLSX.utils.encode_cell({ r: lastRow, c: 3 })] = { v: 'BALANCE', t: 's' };
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Transactions");
@@ -960,36 +1014,86 @@ export default function App() {
 
         for (const t of transactionsWithImages) {
           if (t.images) {
-            for (const img of t.images) {
-              try {
-                if (!isFirstPage) {
-                  doc.addPage();
-                }
+            const layout = t.imageLayout || 'split';
+            
+            if (layout === 'merge') {
+              // Merge layout: 2 images per page side-by-side
+              for (let i = 0; i < t.images.length; i += 2) {
+                if (!isFirstPage) doc.addPage();
                 isFirstPage = false;
-                
-                // Detect format from base64
-                let format = 'JPEG';
-                if (img.startsWith('data:image/png')) format = 'PNG';
-                else if (img.startsWith('data:image/webp')) format = 'WEBP';
-                
-                // Clean base64 string if needed
-                const base64Data = img.includes('base64,') ? img.split('base64,')[1] : img;
-                
-                // Add image to PDF - fit to page (90%)
+
                 const pageWidth = doc.internal.pageSize.getWidth();
                 const pageHeight = doc.internal.pageSize.getHeight();
-                const imgWidth = pageWidth * 0.9;
-                const imgHeight = pageHeight * 0.9;
-                const x = (pageWidth - imgWidth) / 2;
+                const margin = 10;
+                const gap = 5;
+                const availableWidth = pageWidth - (margin * 2) - gap;
+                const imgWidth = availableWidth / 2;
+                const imgHeight = pageHeight * 0.6; // Take 60% of height for side-by-side
                 const y = (pageHeight - imgHeight) / 2;
-                doc.addImage(base64Data, format as any, x, y, imgWidth, imgHeight, undefined, 'FAST');
-              } catch (e) {
-                console.error("Could not add image to PDF:", e);
+
+                // Add transaction header
+                doc.setFontSize(10);
+                doc.setTextColor(80);
+                doc.text(`Transaction: ${t.description} (${t.amount}) - ${t.date.toLocaleDateString('en-IN')}`, 10, 10);
+
+                // First image in pair
+                try {
+                  const img1 = t.images[i];
+                  let format1 = 'JPEG';
+                  if (img1.startsWith('data:image/png')) format1 = 'PNG';
+                  else if (img1.startsWith('data:image/webp')) format1 = 'WEBP';
+                  const base64Data1 = img1.includes('base64,') ? img1.split('base64,')[1] : img1;
+                  doc.addImage(base64Data1, format1 as any, margin, y, imgWidth, imgHeight, undefined, 'FAST');
+                } catch (e) { console.error(e); }
+                processedImages++;
+
+                // Second image in pair (if exists)
+                if (i + 1 < t.images.length) {
+                  try {
+                    const img2 = t.images[i + 1];
+                    let format2 = 'JPEG';
+                    if (img2.startsWith('data:image/png')) format2 = 'PNG';
+                    else if (img2.startsWith('data:image/webp')) format2 = 'WEBP';
+                    const base64Data2 = img2.includes('base64,') ? img2.split('base64,')[1] : img2;
+                    doc.addImage(base64Data2, format2 as any, margin + imgWidth + gap, y, imgWidth, imgHeight, undefined, 'FAST');
+                  } catch (e) { console.error(e); }
+                  processedImages++;
+                }
+
+                const imageProgress = 40 + (processedImages / totalImages) * 50;
+                setReportLoading({ type: 'pdf', progress: Math.round(imageProgress) });
               }
-              
-              processedImages++;
-              const imageProgress = 40 + (processedImages / totalImages) * 50;
-              setReportLoading({ type: 'pdf', progress: Math.round(imageProgress) });
+            } else {
+              // Split layout: 1 image per page (current behavior)
+              for (const img of t.images) {
+                try {
+                  if (!isFirstPage) doc.addPage();
+                  isFirstPage = false;
+                  
+                  let format = 'JPEG';
+                  if (img.startsWith('data:image/png')) format = 'PNG';
+                  else if (img.startsWith('data:image/webp')) format = 'WEBP';
+                  const base64Data = img.includes('base64,') ? img.split('base64,')[1] : img;
+                  
+                  const pageWidth = doc.internal.pageSize.getWidth();
+                  const pageHeight = doc.internal.pageSize.getHeight();
+                  const imgWidth = pageWidth * 0.9;
+                  const imgHeight = pageHeight * 0.9;
+                  const x = (pageWidth - imgWidth) / 2;
+                  const y = (pageHeight - imgHeight) / 2;
+
+                  // Add transaction header
+                  doc.setFontSize(10);
+                  doc.setTextColor(80);
+                  doc.text(`Transaction: ${t.description} (${t.amount}) - ${t.date.toLocaleDateString('en-IN')}`, 10, 10);
+
+                  doc.addImage(base64Data, format as any, x, y, imgWidth, imgHeight, undefined, 'FAST');
+                } catch (e) { console.error(e); }
+                
+                processedImages++;
+                const imageProgress = 40 + (processedImages / totalImages) * 50;
+                setReportLoading({ type: 'pdf', progress: Math.round(imageProgress) });
+              }
             }
           }
         }
@@ -1002,6 +1106,18 @@ export default function App() {
       await new Promise(r => setTimeout(r, 300));
       
       const fileName = `${activeBook.name.replace(/[^a-z0-9]/gi, '_')}_Report.pdf`;
+      
+      // Add page numbers and footer
+      const totalPages = doc.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(`Page ${i} of ${totalPages}`, doc.internal.pageSize.getWidth() / 2, doc.internal.pageSize.getHeight() - 5, { align: 'center' });
+        doc.text(`Report: ${activeBook.name}`, 10, doc.internal.pageSize.getHeight() - 5);
+        doc.text(new Date().toLocaleDateString('en-IN'), doc.internal.pageSize.getWidth() - 30, doc.internal.pageSize.getHeight() - 5);
+      }
+
       doc.save(fileName);
       console.log("PDF saved successfully");
       
@@ -1147,7 +1263,7 @@ export default function App() {
           <p className={cn(
             "font-medium animate-pulse transition-colors duration-300",
             theme === 'dark' ? "text-slate-400" : "text-black"
-          )}>Loading AI Cashbook...</p>
+          )}>Loading Track Book...</p>
         </div>
       </div>
     );
@@ -1198,11 +1314,11 @@ export default function App() {
                 <Wallet size={18} className="sm:w-5 sm:h-5" />
               </motion.div>
               <div className="flex items-center gap-1 leading-none">
-                <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm sm:text-base tracking-tight">AI</span>
+                <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm sm:text-base tracking-tight">Track</span>
                 <span className={cn(
                   "font-black text-sm sm:text-base tracking-tight transition-colors duration-300",
                   theme === 'dark' ? "text-slate-100" : "text-slate-800"
-                )}>Cashbook</span>
+                )}>Book</span>
               </div>
             </div>
 
@@ -1401,7 +1517,7 @@ export default function App() {
                 <div className="flex items-center gap-3 sm:gap-4">
                   {selectedBooks.size > 0 ? (
                     <button
-                      onClick={() => setShowBulkDeleteConfirm(true)}
+                      onClick={() => { setShowBulkDeleteConfirm(true); setDeleteTimer(5); }}
                       className={cn(
                         "flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm sm:text-base animate-in fade-in zoom-in duration-200",
                         theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
@@ -1695,12 +1811,12 @@ export default function App() {
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}
-                        className="overflow-hidden bg-slate-50 dark:bg-slate-800/50"
+                        className="overflow-hidden bg-white dark:bg-slate-800/50"
                       >
                         <div className="grid grid-cols-2 divide-x divide-slate-100 dark:divide-slate-800 border-t border-slate-100 dark:border-slate-800">
                           <button 
                             onClick={exportToExcel}
-                            className="flex items-center justify-center gap-2 py-4 hover:bg-white dark:hover:bg-slate-800 transition-all"
+                            className="flex items-center justify-center gap-2 py-4 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
                           >
                             <Download size={16} className="text-emerald-600" />
                             <span className={cn(
@@ -1710,7 +1826,7 @@ export default function App() {
                           </button>
                           <button 
                             onClick={exportToPDF}
-                            className="flex items-center justify-center gap-2 py-4 hover:bg-white dark:hover:bg-slate-800 transition-all"
+                            className="flex items-center justify-center gap-2 py-4 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
                           >
                             <FileText size={16} className="text-rose-600" />
                             <span className={cn(
@@ -1729,14 +1845,24 @@ export default function App() {
               <div className="hidden lg:flex items-center gap-3">
                 <button
                   onClick={() => { setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-xl font-bold transition-all hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                  className={cn(
+                    "flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                    theme === 'dark' 
+                      ? "bg-emerald-900/20 text-emerald-400 hover:bg-emerald-900/40" 
+                      : "bg-emerald-50/80 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 shadow-sm shadow-emerald-100/50"
+                  )}
                 >
                   <Plus size={20} />
                   Cash In
                 </button>
                 <button
                   onClick={() => { setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-xl font-bold transition-all hover:bg-rose-100 dark:hover:bg-rose-900/40"
+                  className={cn(
+                    "flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                    theme === 'dark' 
+                      ? "bg-rose-900/20 text-rose-400 hover:bg-rose-900/40" 
+                      : "bg-rose-50/80 border border-rose-100 text-rose-700 hover:bg-rose-100 shadow-sm shadow-rose-100/50"
+                  )}
                 >
                   <Minus size={20} />
                   Cash Out
@@ -1744,7 +1870,12 @@ export default function App() {
                 <button
                   onClick={() => setShowAiWarning(true)}
                   disabled={isUploading}
-                  className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-xl font-bold transition-all hover:bg-indigo-100 dark:hover:bg-indigo-900/40"
+                  className={cn(
+                    "flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                    theme === 'dark' 
+                      ? "bg-indigo-900/20 text-indigo-400 hover:bg-indigo-900/40" 
+                      : "bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shadow-sm shadow-indigo-100/20"
+                  )}
                 >
                   {isUploading ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
                   AI Upload
@@ -1781,7 +1912,7 @@ export default function App() {
                   </button>
                   {selectedTransactions.size > 0 && (
                     <button
-                      onClick={() => setShowBulkTransactionDeleteConfirm(true)}
+                      onClick={() => { setShowBulkTransactionDeleteConfirm(true); setDeleteTimer(5); }}
                       className={cn(
                         "flex items-center gap-2 px-4 py-2.5 sm:py-3 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-all whitespace-nowrap text-xs sm:text-sm",
                         theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
@@ -1828,7 +1959,10 @@ export default function App() {
                   "p-6 rounded-3xl border flex items-center gap-4 shadow-sm transition-colors duration-300",
                   theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
                 )}>
-                  <div className="p-3 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 rounded-2xl">
+                  <div className={cn(
+                    "p-3 rounded-2xl",
+                    theme === 'dark' ? "bg-emerald-900/20 text-emerald-400" : "bg-emerald-50 text-emerald-600"
+                  )}>
                     <Plus size={24} />
                   </div>
                   <div>
@@ -1849,7 +1983,10 @@ export default function App() {
                   "p-6 rounded-3xl border flex items-center gap-4 shadow-sm transition-colors duration-300",
                   theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
                 )}>
-                  <div className="p-3 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-2xl">
+                  <div className={cn(
+                    "p-3 rounded-2xl",
+                    theme === 'dark' ? "bg-rose-900/20 text-rose-400" : "bg-rose-50 text-rose-600"
+                  )}>
                     <Minus size={24} />
                   </div>
                   <div>
@@ -1870,7 +2007,10 @@ export default function App() {
                   "p-6 rounded-3xl border flex items-center gap-4 shadow-sm transition-colors duration-300",
                   theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
                 )}>
-                  <div className="p-3 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-2xl">
+                  <div className={cn(
+                    "p-3 rounded-2xl",
+                    theme === 'dark' ? "bg-indigo-900/20 text-indigo-400" : "bg-indigo-50 text-indigo-600"
+                  )}>
                     <Wallet size={24} />
                   </div>
                   <div>
@@ -2180,7 +2320,10 @@ export default function App() {
                                         theme === 'dark' ? "text-slate-300" : "text-black"
                                       )}>{t.description || '--'}</p>
                                       {t.isAi && (
-                                        <span className="px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 text-[9px] font-black rounded-full flex items-center gap-0.5 border border-amber-200 dark:border-amber-800">
+                                        <span className={cn(
+                                          "px-1.5 py-0.5 text-[9px] font-black rounded-full flex items-center gap-0.5 border",
+                                          theme === 'dark' ? "bg-amber-900/40 text-amber-400 border-amber-800" : "bg-amber-50 text-amber-600 border-amber-200"
+                                        )}>
                                           <Sparkles size={10} />
                                           AI
                                         </span>
@@ -2274,8 +2417,10 @@ export default function App() {
                   onClick={() => setShowAiWarning(true)}
                   disabled={isUploading}
                   className={cn(
-                    "w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-black shadow-lg transition-all active:scale-95",
-                    theme === 'dark' ? "bg-indigo-900/20 text-indigo-400 shadow-none" : "bg-indigo-50 text-indigo-600 shadow-indigo-100"
+                    "w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-black transition-all active:scale-95",
+                    theme === 'dark' 
+                      ? "bg-indigo-900/20 text-indigo-400 shadow-none" 
+                      : "bg-white border border-indigo-200 text-indigo-700 shadow-sm shadow-indigo-100/20"
                   )}
                 >
                   {isUploading ? <Loader2 size={20} className="animate-spin" /> : <motion.div animate={{ rotate: [0, 15, -15, 0] }} transition={{ repeat: Infinity, duration: 2 }}><Upload size={20} /></motion.div>}
@@ -2285,8 +2430,10 @@ export default function App() {
                   <button
                     onClick={() => { setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
                     className={cn(
-                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black shadow-lg transition-all active:scale-95",
-                      theme === 'dark' ? "bg-emerald-900/20 text-emerald-400 shadow-none" : "bg-emerald-50 text-emerald-600 shadow-emerald-100"
+                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black transition-all active:scale-95",
+                      theme === 'dark' 
+                        ? "bg-emerald-900/20 text-emerald-400 shadow-none" 
+                        : "bg-white border border-emerald-200 text-emerald-700 shadow-sm shadow-emerald-100/20"
                     )}
                   >
                     <Plus size={20} />
@@ -2295,8 +2442,10 @@ export default function App() {
                   <button
                     onClick={() => { setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
                     className={cn(
-                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black shadow-lg transition-all active:scale-95",
-                      theme === 'dark' ? "bg-rose-900/20 text-rose-400 shadow-none" : "bg-rose-50 text-rose-600 shadow-rose-100"
+                      "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black transition-all active:scale-95",
+                      theme === 'dark' 
+                        ? "bg-rose-900/20 text-rose-400 shadow-none" 
+                        : "bg-white border border-rose-200 text-rose-700 shadow-sm shadow-rose-100/20"
                     )}
                   >
                     <Minus size={20} />
@@ -2344,19 +2493,20 @@ export default function App() {
               </div>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setDeleteConfirmId(null)}
+                  onClick={() => { setDeleteConfirmId(null); setDeleteTimer(0); }}
                   className="flex-1 py-3 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
                 >
                   Cancel
                 </button>
                 <button 
                   onClick={confirmDeleteBook}
+                  disabled={deleteTimer > 0}
                   className={cn(
-                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all",
+                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed",
                     theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
                   )}
                 >
-                  Delete
+                  {deleteTimer > 0 ? `Delete (${deleteTimer}s)` : 'Delete'}
                 </button>
               </div>
             </motion.div>
@@ -2397,19 +2547,20 @@ export default function App() {
               </div>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setTransactionToDelete(null)}
+                  onClick={() => { setTransactionToDelete(null); setDeleteTimer(0); }}
                   className="flex-1 py-3 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
                 >
                   Cancel
                 </button>
                 <button 
                   onClick={confirmDeleteTransaction}
+                  disabled={deleteTimer > 0}
                   className={cn(
-                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all",
+                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed",
                     theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
                   )}
                 >
-                  Delete
+                  {deleteTimer > 0 ? `Delete (${deleteTimer}s)` : 'Delete'}
                 </button>
               </div>
             </motion.div>
@@ -2433,7 +2584,10 @@ export default function App() {
                 theme === 'dark' ? "bg-zinc-950" : "bg-white"
               )}
             >
-              <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mx-auto">
+              <div className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center mx-auto",
+                theme === 'dark' ? "bg-indigo-900/20 text-indigo-400" : "bg-indigo-50 text-indigo-600"
+              )}>
                 <Upload size={32} />
               </div>
               <div className="space-y-2">
@@ -2476,7 +2630,7 @@ export default function App() {
         {showDropZone && (
           <div className={cn(
             "fixed inset-0 z-[120] flex items-center justify-center p-4 backdrop-blur-md transition-colors duration-300",
-            theme === 'dark' ? "bg-black/70" : "bg-indigo-900/20"
+            theme === 'dark' ? "bg-black/70" : "bg-slate-900/40"
           )}>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -2484,7 +2638,7 @@ export default function App() {
               exit={{ opacity: 0, y: 20 }}
               className={cn(
                 "w-full max-w-md rounded-3xl p-8 shadow-2xl space-y-6 transition-colors duration-300",
-                theme === 'dark' ? "bg-zinc-950" : "bg-white"
+                theme === 'dark' ? "bg-zinc-950" : "bg-white border border-slate-100"
               )}
             >
               <div className="flex items-center justify-between">
@@ -2510,14 +2664,23 @@ export default function App() {
                   }
                 }}
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-indigo-200 dark:border-indigo-900/50 rounded-2xl p-10 flex flex-col items-center justify-center gap-4 bg-indigo-50/30 dark:bg-indigo-900/5 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10 transition-all cursor-pointer group"
+                className={cn(
+                  "border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer group",
+                  theme === 'dark' ? "border-indigo-900/50 bg-indigo-900/5 hover:bg-indigo-900/10" : "border-indigo-200 bg-indigo-50/30 hover:bg-indigo-50/50"
+                )}
               >
                 <div className="w-16 h-16 bg-white dark:bg-slate-800 rounded-2xl shadow-sm flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform">
                   <Upload size={32} />
                 </div>
                 <div className="text-center">
-                  <p className="font-bold text-slate-800 dark:text-white">Drag & Drop images here</p>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">or click to browse files</p>
+                  <p className={cn(
+                    "font-bold transition-colors duration-300",
+                    theme === 'dark' ? "text-white" : "text-black"
+                  )}>Drag & Drop images here</p>
+                  <p className={cn(
+                    "text-sm transition-colors duration-300",
+                    theme === 'dark' ? "text-slate-400" : "text-slate-500"
+                  )}>or click to browse files</p>
                 </div>
               </div>
 
@@ -2883,48 +3046,139 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Image Layout Selection */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Image Layout in PDF</label>
+                    <div className={cn(
+                      "p-1 rounded-xl flex gap-1 transition-colors duration-300",
+                      theme === 'dark' ? "bg-slate-800" : "bg-slate-100"
+                    )}>
+                      <button
+                        type="button"
+                        onClick={() => setImageLayout('merge')}
+                        className={cn(
+                          "flex-1 py-2 rounded-lg font-bold transition-all text-[10px] flex items-center justify-center gap-2",
+                          imageLayout === 'merge' 
+                            ? (theme === 'dark' ? "bg-slate-700 text-indigo-400 shadow-sm" : "bg-white text-indigo-600 shadow-sm")
+                            : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
+                        )}
+                      >
+                        <LayoutGrid size={14} />
+                        MERGE (Side by Side)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImageLayout('split')}
+                        className={cn(
+                          "flex-1 py-2 rounded-lg font-bold transition-all text-[10px] flex items-center justify-center gap-2",
+                          imageLayout === 'split' 
+                            ? (theme === 'dark' ? "bg-slate-700 text-indigo-400 shadow-sm" : "bg-white text-indigo-600 shadow-sm")
+                            : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
+                        )}
+                      >
+                        <List size={14} />
+                        SPLIT (Page by Page)
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Bills / Attachments (Max 5)</label>
                     <div className="space-y-3">
                       {selectedImages.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {selectedImages.map((img, i) => (
-                            <div key={i} className="relative group w-16 h-16 sm:w-20 sm:h-20">
-                              <img 
-                                src={img} 
-                                alt="preview" 
-                                className="w-full h-full object-cover rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer" 
-                                onClick={() => {
-                                  setPreviewImages(selectedImages);
-                                  setPreviewIndex(i);
-                                  setPreviewRotation(0);
-                                  setPreviewZoom(1);
-                                }}
-                              />
+                        <div className="space-y-4">
+                          {/* Merge Preview if selected */}
+                          {imageLayout === 'merge' && selectedImages.length > 1 && (
+                            <div className={cn(
+                              "p-3 rounded-2xl border border-dashed transition-colors duration-300",
+                              theme === 'dark' ? "bg-indigo-950/20 border-indigo-900/50" : "bg-indigo-50/50 border-indigo-200"
+                            )}>
+                              <p className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 mb-2 flex items-center gap-1">
+                                <Sparkles size={10} />
+                                PDF MERGE PREVIEW
+                              </p>
+                              <div className="grid grid-cols-2 gap-2">
+                                {selectedImages.map((img, i) => (
+                                  <div key={i} className="relative aspect-[3/4] rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                                    <img src={img} alt="preview" className="w-full h-full object-cover" />
+                                    <div className="absolute bottom-1 right-1 bg-black/50 text-[6px] text-white px-1 rounded">P.{Math.floor(i/2) + 1}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap gap-2">
+                            {selectedImages.map((img, i) => (
+                              <div key={i} className="relative group w-20 h-20 sm:w-24 sm:h-24">
+                                <img 
+                                  src={img} 
+                                  alt="preview" 
+                                  className="w-full h-full object-cover rounded-xl border border-slate-200 dark:border-slate-700 cursor-pointer" 
+                                  onClick={() => {
+                                    setPreviewImages(selectedImages);
+                                    setPreviewIndex(i);
+                                    setPreviewRotation(0);
+                                    setPreviewZoom(1);
+                                  }}
+                                />
+                                
+                                {/* Reorder Controls - Always Visible on Hover, but semi-visible always */}
+                                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-between px-1 pointer-events-none">
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); moveImage(i, 'up'); }}
+                                    disabled={i === 0}
+                                    className={cn(
+                                      "p-1 bg-black/40 hover:bg-black/70 text-white rounded-full transition-all pointer-events-auto",
+                                      i === 0 ? "opacity-0" : "opacity-60 group-hover:opacity-100"
+                                    )}
+                                  >
+                                    <ChevronLeft size={14} />
+                                  </button>
+                                  <button 
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); moveImage(i, 'down'); }}
+                                    disabled={i === selectedImages.length - 1}
+                                    className={cn(
+                                      "p-1 bg-black/40 hover:bg-black/70 text-white rounded-full transition-all pointer-events-auto",
+                                      i === selectedImages.length - 1 ? "opacity-0" : "opacity-60 group-hover:opacity-100"
+                                    )}
+                                  >
+                                    <ChevronRight size={14} />
+                                  </button>
+                                </div>
+
+                                <button 
+                                  type="button"
+                                  onClick={() => removeImage(i)}
+                                  className={cn(
+                                    "absolute -top-2 -right-2 p-1 bg-rose-600 text-white rounded-full transition-opacity z-10",
+                                    theme === 'dark' ? "shadow-none" : "shadow-lg",
+                                    "opacity-0 group-hover:opacity-100"
+                                  )}
+                                >
+                                  <X size={12} />
+                                </button>
+                                
+                                <div className="absolute bottom-1 left-1/2 -translate-x-1/2 bg-black/50 text-[8px] text-white px-1.5 rounded-full">
+                                  {i + 1}
+                                </div>
+                              </div>
+                            ))}
+                            {selectedImages.length < 5 && (
                               <button 
                                 type="button"
-                                onClick={() => removeImage(i)}
+                                onClick={() => multiFileInputRef.current?.click()}
                                 className={cn(
-                                  "absolute -top-2 -right-2 p-1 bg-rose-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity",
-                                  theme === 'dark' ? "shadow-none" : "shadow-lg"
+                                  "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center border-2 border-dashed rounded-xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all",
+                                  theme === 'dark' ? "border-slate-800" : "border-slate-200"
                                 )}
                               >
-                                <X size={12} />
+                                <Plus size={24} />
                               </button>
-                            </div>
-                          ))}
-                          {selectedImages.length < 5 && (
-                            <button 
-                              type="button"
-                              onClick={() => multiFileInputRef.current?.click()}
-                              className={cn(
-                                "w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center border-2 border-dashed rounded-xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all",
-                                theme === 'dark' ? "border-slate-800" : "border-slate-200"
-                              )}
-                            >
-                              <Plus size={24} />
-                            </button>
-                          )}
+                            )}
+                          </div>
                         </div>
                       )}
                       
@@ -3380,7 +3634,7 @@ export default function App() {
               </div>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setShowBulkTransactionDeleteConfirm(false)}
+                  onClick={() => { setShowBulkTransactionDeleteConfirm(false); setDeleteTimer(0); }}
                   className={cn(
                     "flex-1 py-3 border rounded-xl font-bold transition-all",
                     theme === 'dark' ? "border-slate-800 text-slate-400 hover:bg-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -3390,9 +3644,12 @@ export default function App() {
                 </button>
                 <button 
                   onClick={handleBulkDelete}
-                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all"
+                  disabled={deleteTimer > 0}
+                  className={cn(
+                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
                 >
-                  Delete
+                  {deleteTimer > 0 ? `Delete (${deleteTimer}s)` : 'Delete'}
                 </button>
               </div>
             </motion.div>
@@ -3433,7 +3690,7 @@ export default function App() {
               </div>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setShowBulkDeleteConfirm(false)}
+                  onClick={() => { setShowBulkDeleteConfirm(false); setDeleteTimer(0); }}
                   className={cn(
                     "flex-1 py-3 border rounded-xl font-bold transition-all",
                     theme === 'dark' ? "border-slate-800 text-slate-400 hover:bg-slate-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -3443,9 +3700,12 @@ export default function App() {
                 </button>
                 <button 
                   onClick={handleBulkDeleteBooks}
-                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all"
+                  disabled={deleteTimer > 0}
+                  className={cn(
+                    "flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-lg shadow-rose-100 dark:shadow-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
                 >
-                  Delete
+                  {deleteTimer > 0 ? `Delete (${deleteTimer}s)` : 'Delete'}
                 </button>
               </div>
             </motion.div>
@@ -3469,7 +3729,10 @@ export default function App() {
                 theme === 'dark' ? "bg-zinc-950" : "bg-white"
               )}
             >
-              <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mx-auto">
+              <div className={cn(
+                "w-16 h-16 rounded-full flex items-center justify-center mx-auto",
+                theme === 'dark' ? "bg-indigo-900/20 text-indigo-400" : "bg-indigo-50 text-indigo-600"
+              )}>
                 <LogOut size={32} />
               </div>
               <div className="space-y-2">
