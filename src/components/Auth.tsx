@@ -14,9 +14,15 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type AuthMode = 'signin' | 'signup' | 'forgot' | 'reset';
+type AuthMode = 'signin' | 'signup' | 'forgot';
 
-export default function Auth({ theme = 'light' }: { theme?: string }) {
+export default function Auth({ 
+  theme = 'light', 
+  onRecoveryComplete 
+}: { 
+  theme?: string;
+  onRecoveryComplete?: () => void;
+}) {
   const [mode, setMode] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,10 +39,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
     const hash = window.location.hash;
     const params = new URLSearchParams(window.location.search);
     
-    if (hash.includes('type=recovery') || params.get('mode') === 'reset') {
-      setMode('reset');
-      setSuccess('Please enter your new password below.');
-    } else if (hash.includes('type=signup') || hash.includes('error_code=otp_expired')) {
+    if (hash.includes('type=signup') || hash.includes('error_code=otp_expired')) {
       setMode('signin');
       if (hash.includes('error_code=otp_expired')) {
         setError('Link expired. Please try signing up again or contact support.');
@@ -86,7 +89,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
       return;
     }
     
-    if (mode === 'signup' || mode === 'reset') {
+    if (mode === 'signup') {
       if (!isPasswordStrong) {
         setError('Please meet all password requirements');
         return;
@@ -133,17 +136,10 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
         console.log('SignIn Success:', data);
       } else if (mode === 'forgot') {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: `${redirectTo}?mode=reset`,
+          redirectTo: `${redirectTo}/resetpassword`,
         });
         if (error) throw error;
         setSuccess('Password reset link sent to your email!');
-      } else if (mode === 'reset') {
-        const { error } = await supabase.auth.updateUser({
-          password: password
-        });
-        if (error) throw error;
-        setSuccess('Password updated successfully! Redirecting to login...');
-        setTimeout(() => setMode('signin'), 2000);
       }
     } catch (err: any) {
       console.error('Auth error:', err);
@@ -187,7 +183,6 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
           )}>
             {mode === 'signin' ? 'Welcome back! Please login to continue.' : 
              mode === 'signup' ? 'Join us to start tracking your expenses.' : 
-             mode === 'reset' ? 'Set a strong new password for your account.' :
              'Reset your forgotten password.'}
           </p>
         </div>
@@ -278,7 +273,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
                   "text-[10px] font-bold ml-1 transition-colors duration-300",
                   theme === 'dark' ? "text-slate-300" : "text-black"
                 )}>
-                  {mode === 'reset' ? 'New Password' : 'Password'}
+                  Password
                 </label>
                 <div className="relative">
                   <input
@@ -286,7 +281,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder={mode === 'reset' ? "Enter new password" : "Enter your password"}
+                    placeholder="Enter your password"
                     className={cn(
                       "w-full border focus:border-[#3b82f6] rounded-lg py-2 px-3.5 outline-none transition-all text-xs font-medium placeholder:text-[#cbd5e1] pr-9",
                       theme === 'dark' ? "bg-zinc-900 border-zinc-800 text-slate-100" : "bg-white border-[#e2e8f0] text-slate-800"
@@ -303,7 +298,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
                 
                 {/* Password Strength Indicator */}
                 <AnimatePresence>
-                  {(mode === 'signup' || mode === 'reset') && password.length > 0 && (
+                  {mode === 'signup' && password.length > 0 && (
                     <motion.div 
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
@@ -350,7 +345,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
                 </AnimatePresence>
               </div>
 
-              {(mode === 'signup' || mode === 'reset') && (
+              {mode === 'signup' && (
               <div className="space-y-1">
                 <label className={cn(
                   "text-[10px] font-bold ml-1 transition-colors duration-300",
@@ -401,7 +396,6 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
             ) : (
               mode === 'signin' ? 'Login' : 
               mode === 'signup' ? 'Sign Up' : 
-              mode === 'reset' ? 'Update Password' :
               'Reset Password'
             )}
           </motion.button>
@@ -447,7 +441,7 @@ export default function Auth({ theme = 'light' }: { theme?: string }) {
                   Login
                 </button>
               </p>
-              {(mode === 'forgot' || mode === 'reset') && (
+              {mode === 'forgot' && (
                 <button 
                   onClick={() => setMode('signin')}
                   className={cn(
