@@ -169,12 +169,15 @@ export default function Auth({
         )}
       >
         <div className="text-center mb-4">
-          <div className="flex items-center justify-center gap-1.5 mb-1 font-outfit">
-            <span className="text-[24px] font-black text-[#3b82f6] dark:text-blue-400 tracking-tight">Track</span>
-            <span className={cn(
-              "text-[24px] font-black tracking-tight transition-colors duration-300",
-              theme === 'dark' ? "text-slate-100" : "text-slate-800"
-            )}>Book</span>
+          <div className="flex flex-col items-center justify-center gap-2 mb-2 font-outfit">
+            <img src="/icon.svg" alt="TrackBook Logo" className="w-12 h-12 rounded-xl shadow-sm" referrerPolicy="no-referrer" />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[24px] font-black text-[#3b82f6] dark:text-blue-400 tracking-tight">Track</span>
+              <span className={cn(
+                "text-[24px] font-black tracking-tight transition-colors duration-300",
+                theme === 'dark' ? "text-slate-100" : "text-slate-800"
+              )}>Book</span>
+            </div>
           </div>
 
           <p className={cn(
