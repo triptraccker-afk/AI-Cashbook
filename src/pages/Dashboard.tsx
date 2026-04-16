@@ -52,7 +52,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
-import { cn, formatCurrency } from '../lib/utils';
+import { cn, formatCurrency, vibrate } from '../lib/utils';
 import { parseReceipt, getApiKey } from '../services/gemini';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
@@ -145,10 +145,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   const handleTransactionLongPress = (id: string) => {
     if (selectedTransactions.size === 0) {
       toggleSelectTransaction(id);
-      // Vibrate if supported
-      if (window.navigator.vibrate) {
-        window.navigator.vibrate(50);
-      }
+      vibrate(50);
     }
   };
 
@@ -185,9 +182,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   const handleBookLongPress = (id: string) => {
     if (selectedBooks.size === 0) {
       toggleSelectBook(id);
-      if (window.navigator.vibrate) {
-        window.navigator.vibrate(50);
-      }
+      vibrate(50);
     }
   };
 
@@ -202,6 +197,57 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
       clearTimeout(bookLongPressTimer.current);
     }
   };
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    let lastKey = '';
+    let lastKeyTime = 0;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts if user is typing in an input or textarea
+      const activeElement = document.activeElement;
+      const isInput = activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA' || (activeElement as HTMLElement)?.isContentEditable;
+      if (isInput) return;
+
+      const key = e.key.toUpperCase();
+      const now = Date.now();
+
+      // Clear last key if too much time passed (e.g. 1 second)
+      if (now - lastKeyTime > 1000) {
+        lastKey = '';
+      }
+
+      if (lastKey === 'C') {
+        if (key === 'B') {
+          e.preventDefault();
+          setIsCreatingBook(true);
+          lastKey = '';
+        } else if (key === 'I' && activeBookId) {
+          e.preventDefault();
+          setShowForm('in');
+          setTransactionDate(safeToDateTimeLocal(new Date()));
+          lastKey = '';
+        } else if (key === 'O' && activeBookId) {
+          e.preventDefault();
+          setShowForm('out');
+          setTransactionDate(safeToDateTimeLocal(new Date()));
+          lastKey = '';
+        }
+      } else if (lastKey === 'A') {
+        if (key === 'U' && activeBookId) {
+          e.preventDefault();
+          setShowAiWarning(true);
+          lastKey = '';
+        }
+      }
+
+      lastKey = key;
+      lastKeyTime = now;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeBookId]);
 
   const toggleTheme = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -553,6 +599,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   };
 
   const handleDeleteBook = (id: string) => {
+    vibrate(50);
     setDeleteConfirmId(id);
     setDeleteTimer(5);
   };
@@ -745,6 +792,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   };
 
   const handleDeleteTransaction = (id: string) => {
+    vibrate(50);
     setTransactionToDelete(id);
     setDeleteTimer(5);
   };
@@ -1193,23 +1241,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   };
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen bg-[#f3f7ff] dark:bg-slate-950 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-            className="inline-block"
-          >
-            <Loader2 size={40} className="text-indigo-600" />
-          </motion.div>
-          <p className={cn(
-            "font-medium animate-pulse transition-colors duration-300",
-            theme === 'dark' ? "text-slate-400" : "text-black"
-          )}>Loading Track Book...</p>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -1248,9 +1280,9 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
               <motion.div
                 animate={{ rotate: [0, 10, -10, 0] }}
                 transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
-                className="p-1.5 sm:p-2 bg-indigo-600 rounded-lg text-white hidden xs:block"
+                className="hidden xs:block"
               >
-                <Wallet size={18} className="sm:w-5 sm:h-5" />
+                <img src="/icon.svg" alt="Logo" className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg shadow-sm" referrerPolicy="no-referrer" />
               </motion.div>
               <div className="flex items-center gap-1 leading-none">
                 <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm sm:text-base tracking-tight">Track</span>
@@ -1282,7 +1314,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
             <div className="flex items-center gap-1 sm:gap-2">
               {/* Mobile Search Button (Right side) */}
               <button 
-                onClick={() => setIsSearchExpanded(true)}
+                onClick={() => { vibrate(); setIsSearchExpanded(true); }}
                 className="sm:hidden p-2 text-slate-400 hover:text-indigo-600 transition-colors"
               >
                 <Search size={20} />
@@ -1290,7 +1322,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
 
               <div className="relative shrink-0" ref={dropdownRef}>
                 <button 
-                  onClick={() => setIsProfileOpen(!isProfileOpen)}
+                  onClick={() => { vibrate(); setIsProfileOpen(!isProfileOpen); }}
                   className="flex items-center gap-1.5 sm:gap-2 p-1 pr-2 sm:pr-3 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
                 >
                   <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs sm:text-sm">
@@ -1322,7 +1354,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                       </div>
 
                       <button 
-                        onClick={toggleTheme}
+                        onClick={(e) => { vibrate(); toggleTheme(e); }}
                         className={cn(
                           "w-full flex items-center gap-3 p-3 rounded-xl transition-all",
                           theme === 'dark' ? "hover:bg-zinc-900 text-slate-300" : "hover:bg-slate-50 text-black"
@@ -1413,23 +1445,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
       {/* Main Content Area */}
       <main className="max-w-6xl mx-auto p-4 sm:p-6">
         <AnimatePresence mode="wait">
-          {isLoading ? (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center min-h-[60vh] space-y-4"
-            >
-              <Loader2 size={48} className="text-indigo-600 animate-spin" />
-              <p className={cn(
-                "font-medium tracking-tight transition-colors duration-300",
-                theme === 'dark' ? "text-slate-400" : "text-black"
-              )}>
-                Loading your financial data...
-              </p>
-            </motion.div>
-          ) : !activeBookId ? (
+          {!activeBookId ? (
             /* PAGE 1: HOME / BOOKS LIST */
             <motion.div
               key="home"
@@ -1456,7 +1472,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 <div className="flex items-center gap-3 sm:gap-4">
                   {selectedBooks.size > 0 ? (
                     <button
-                      onClick={() => { setShowBulkDeleteConfirm(true); setDeleteTimer(5); }}
+                      onClick={() => { vibrate(); setShowBulkDeleteConfirm(true); setDeleteTimer(5); }}
                       className={cn(
                         "flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm sm:text-base animate-in fade-in zoom-in duration-200",
                         theme === 'dark' ? "shadow-none" : "shadow-lg shadow-rose-100"
@@ -1468,14 +1484,17 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                   ) : (
                     books.length > 0 && (
                       <button
-                        onClick={() => setIsCreatingBook(true)}
+                        onClick={() => { vibrate(); setIsCreatingBook(true); }}
                         className={cn(
-                          "flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm sm:text-base",
+                          "group/shortcut relative flex-1 sm:flex-none py-2 sm:py-2.5 px-4 sm:px-6 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 text-sm sm:text-base",
                           theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
                         )}
                       >
                         <Plus size={18} />
                         Create a Book
+                        <span className="hidden lg:group-hover/shortcut:flex absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg whitespace-nowrap items-center gap-1 z-50">
+                          Press <kbd className="bg-slate-700 px-1 rounded">C</kbd> + <kbd className="bg-slate-700 px-1 rounded">B</kbd>
+                        </span>
                       </button>
                     )
                   )}
@@ -1783,9 +1802,9 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
               {/* Action Buttons Row (Desktop Only) */}
               <div className="hidden lg:flex items-center gap-3">
                 <button
-                  onClick={() => { setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
+                  onClick={() => { vibrate(); setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
                   className={cn(
-                    "flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                    "group/shortcut relative flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
                     theme === 'dark' 
                       ? "bg-emerald-900/20 text-emerald-400 hover:bg-emerald-900/40" 
                       : "bg-emerald-50/80 border border-emerald-100 text-emerald-700 hover:bg-emerald-100 shadow-sm shadow-emerald-100/50"
@@ -1793,11 +1812,14 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 >
                   <Plus size={20} />
                   Cash In
+                  <span className="hidden lg:group-hover/shortcut:flex absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg whitespace-nowrap items-center gap-1 z-50">
+                    Press <kbd className="bg-slate-700 px-1 rounded">C</kbd> + <kbd className="bg-slate-700 px-1 rounded">I</kbd>
+                  </span>
                 </button>
                 <button
-                  onClick={() => { setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
+                  onClick={() => { vibrate(); setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
                   className={cn(
-                    "flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                    "group/shortcut relative flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
                     theme === 'dark' 
                       ? "bg-rose-900/20 text-rose-400 hover:bg-rose-900/40" 
                       : "bg-rose-50/80 border border-rose-100 text-rose-700 hover:bg-rose-100 shadow-sm shadow-rose-100/50"
@@ -1805,12 +1827,15 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 >
                   <Minus size={20} />
                   Cash Out
+                  <span className="hidden lg:group-hover/shortcut:flex absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg whitespace-nowrap items-center gap-1 z-50">
+                    Press <kbd className="bg-slate-700 px-1 rounded">C</kbd> + <kbd className="bg-slate-700 px-1 rounded">O</kbd>
+                  </span>
                 </button>
                 <button
-                  onClick={() => setShowAiWarning(true)}
+                  onClick={() => { vibrate(); setShowAiWarning(true); }}
                   disabled={isUploading}
                   className={cn(
-                    "flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                    "group/shortcut relative flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
                     theme === 'dark' 
                       ? "bg-indigo-900/20 text-indigo-400 hover:bg-indigo-900/40" 
                       : "bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shadow-sm shadow-indigo-100/20"
@@ -1818,6 +1843,9 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 >
                   {isUploading ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
                   AI Upload
+                  <span className="hidden lg:group-hover/shortcut:flex absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg whitespace-nowrap items-center gap-1 z-50">
+                    Press <kbd className="bg-slate-700 px-1 rounded">A</kbd> + <kbd className="bg-slate-700 px-1 rounded">U</kbd>
+                  </span>
                 </button>
               </div>
 
@@ -2353,7 +2381,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 theme === 'dark' ? "bg-slate-900/80 border-slate-800" : "bg-white/80 border-slate-100"
               )}>
                 <button
-                  onClick={() => setShowAiWarning(true)}
+                  onClick={() => { vibrate(); setShowAiWarning(true); }}
                   disabled={isUploading}
                   className={cn(
                     "w-full flex items-center justify-center gap-2 py-3 rounded-2xl font-black transition-all active:scale-95",
@@ -2367,7 +2395,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 </button>
                 <div className="flex gap-3">
                   <button
-                    onClick={() => { setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
+                    onClick={() => { vibrate(); setShowForm('in'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
                     className={cn(
                       "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black transition-all active:scale-95",
                       theme === 'dark' 
@@ -2379,7 +2407,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     CASH IN
                   </button>
                   <button
-                    onClick={() => { setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
+                    onClick={() => { vibrate(); setShowForm('out'); setTransactionDate(safeToDateTimeLocal(new Date())); }}
                     className={cn(
                       "flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl font-black transition-all active:scale-95",
                       theme === 'dark' 
