@@ -106,38 +106,28 @@ export default function App() {
         setLoading={setLoading} 
       />
       
-      {loading ? (
-        <div className="min-h-screen bg-[#f3f7ff] dark:bg-slate-950 flex items-center justify-center">
-          <div className="text-center space-y-4">
-            <Loader2 size={40} className="text-indigo-600 animate-spin mx-auto" />
-            <p className={cn(
-              "font-medium transition-colors duration-300",
-              theme === 'dark' ? "text-slate-400" : "text-black"
-            )}>Loading Track Book...</p>
-          </div>
-        </div>
-      ) : (
-        <Routes>
-          {/* Public Routes */}
-          <Route path="/login" element={<Login theme={theme} />} />
-          <Route path="/resetpassword" element={<ResetPassword />} />
+      <Routes>
+        {/* Public Routes */}
+        <Route path="/login" element={<Login theme={theme} />} />
+        <Route path="/resetpassword" element={<ResetPassword />} />
 
-          {/* Protected Routes */}
-          <Route 
-            path="/" 
-            element={
-              session ? (
-                <Dashboard session={session} theme={theme} setTheme={setTheme} />
-              ) : (
-                <Navigate to="/login" replace />
-              )
-            } 
-          />
+        {/* Protected Routes */}
+        <Route 
+          path="/" 
+          element={
+            session ? (
+              <Dashboard session={session} theme={theme} setTheme={setTheme} />
+            ) : (
+              // If we are still loading initial session, we might want to show nothing or a very minimal spinner
+              // but the user wants to remove the "Loading Track Book" screen entirely.
+              loading ? null : <Navigate to="/login" replace />
+            )
+          } 
+        />
 
-          {/* Fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      )}
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </Router>
   );
 }
