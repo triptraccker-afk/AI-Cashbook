@@ -12,3 +12,13 @@ export function formatCurrency(amount: number) {
     maximumFractionDigits: 0,
   }).format(amount);
 }
+
+export function vibrate(pattern: number | number[] = 50) {
+  if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+    // Only vibrate on mobile devices (simple check)
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      window.navigator.vibrate(pattern);
+    }
+  }
+}
