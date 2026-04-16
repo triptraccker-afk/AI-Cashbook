@@ -82,6 +82,22 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  // PWA Install Prompt handling
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      // Prevent Chrome 67 and earlier from automatically showing the prompt
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      console.log('PWA install prompt available');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
   return (
     <Router>
       <NavigationHandler 
