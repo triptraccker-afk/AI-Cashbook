@@ -1,5 +1,5 @@
 {
-  "name": "Track Book",
+  "name": "Remix: Track Book",
   "description": "A smart financial tracking application that uses AI to automatically categorize and record transactions from receipts.",
   "requestFramePermissions": []
 }
