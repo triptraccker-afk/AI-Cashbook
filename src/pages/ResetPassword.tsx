@@ -20,12 +20,16 @@ export default function ResetPassword() {
   const [success, setSuccess] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [checking, setChecking] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
     // Check if we have a session (Supabase automatically signs in the user when they click the recovery link)
     const checkSession = async () => {
-      if (!supabase) return;
+      if (!supabase) {
+        setChecking(false);
+        return;
+      }
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         // If no session, they might have accessed this page directly without a recovery token
@@ -36,6 +40,7 @@ export default function ResetPassword() {
            setError('Invalid or expired reset link. Please request a new one.');
         }
       }
+      setChecking(false);
     };
     checkSession();
   }, []);
@@ -80,6 +85,14 @@ export default function ResetPassword() {
       setLoading(false);
     }
   };
+
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-[#f3f7ff] dark:bg-slate-950 flex items-center justify-center">
+        <Loader2 size={40} className="text-indigo-600 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#f3f7ff] dark:bg-black font-sans transition-colors duration-300">

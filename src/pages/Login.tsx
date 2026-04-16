@@ -17,7 +17,7 @@ export default function Login({ theme }: { theme: 'light' | 'dark' }) {
     checkUser();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
+      if (session && event !== 'PASSWORD_RECOVERY') {
         navigate('/');
       }
     });
