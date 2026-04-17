@@ -1,11 +1,9 @@
-const CACHE_NAME = 'trackbook-v1';
+const CACHE_NAME = 'trackbook-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/icon.svg',
-  '/icon-192.png',
-  '/icon-512.png'
+  '/icon.svg?v=5'
 ];
 
 self.addEventListener('install', (event) => {
