@@ -47,13 +47,15 @@ import {
   MessageSquare,
   Sun,
   Moon,
-  Palette
+  Palette,
+  ArrowUp,
+  ArrowUpDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { cn, formatCurrency, vibrate } from '../lib/utils';
-import { parseReceipt, getApiKey } from '../services/gemini';
+import { parseReceipt, parseMultipleReceipts, getApiKey } from '../services/gemini';
 import { supabase } from '../lib/supabase';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -112,11 +114,14 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   const [uploadingMessage, setUploadingMessage] = useState('Detecting bill...');
   const [showAiWarning, setShowAiWarning] = useState(false);
   const [showDropZone, setShowDropZone] = useState(false);
+  const [aiMode, setAiMode] = useState<'split' | 'merge'>('split');
   const [error, setError] = useState<string | null>(null);
   const [transactionSearchQuery, setTransactionSearchQuery] = useState('');
   const [transactionTypeFilter, setTransactionTypeFilter] = useState<'all' | 'in' | 'out'>('all');
   const [transactionDurationFilter, setTransactionDurationFilter] = useState('All');
   const [transactionCategoryFilter, setTransactionCategoryFilter] = useState('All');
+  const [sortColumn, setSortColumn] = useState<'date' | 'category' | 'amount'>('date');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [showReportsMenu, setShowReportsMenu] = useState(false);
   const [selectedTransactions, setSelectedTransactions] = useState<Set<string>>(new Set());
   const [selectedBooks, setSelectedBooks] = useState<Set<string>>(new Set());
@@ -124,6 +129,16 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   const [deleteTimer, setDeleteTimer] = useState(0);
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const bookLongPressTimer = useRef<NodeJS.Timeout | null>(null);
+  
+  const toggleSort = (column: 'date' | 'category' | 'amount') => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('asc');
+    }
+    vibrate(30);
+  };
 
   // Delete Timer Effect
   useEffect(() => {
@@ -211,6 +226,22 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
 
       const key = e.key.toUpperCase();
       const now = Date.now();
+
+      // Handle Escape key to close forms/modals
+      if (e.key === 'Escape') {
+        setShowForm(null);
+        setIsCreatingBook(false);
+        setIsEditingName(false);
+        setIsHelpOpen(false);
+        setShowAiWarning(false);
+        setShowReportsMenu(false);
+        setShowBulkDeleteConfirm(false);
+        setShowExitConfirm(false);
+        setEditingTransaction(null);
+        setPreviewImages(null);
+        lastKey = '';
+        return;
+      }
 
       // Clear last key if too much time passed (e.g. 1 second)
       if (now - lastKeyTime > 1000) {
@@ -320,6 +351,24 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
     }
   };
 
+  const parseAIDate = (dateStr: string | undefined): Date => {
+    if (!dateStr) return new Date();
+    
+    // Handle DD-MM-YYYY
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      const day = parseInt(parts[0]);
+      const month = parseInt(parts[1]) - 1; // JS months are 0-indexed
+      const year = parseInt(parts[2]);
+      const d = new Date(year, month, day);
+      if (!isNaN(d.getTime())) return d;
+    }
+    
+    // Fallback to standard parsing
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? new Date() : d;
+  };
+
   const safeToDateTimeLocal = (date: Date | string | number) => {
     try {
       const d = new Date(date);
@@ -404,6 +453,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 ...t,
                 date: t.date ? new Date(t.date) : new Date(),
                 images: [...manualImgs, ...aiImgs],
+                imageLayout: t.image_layout || 'split',
                 isAi: aiImgs.length > 0
               };
             }).sort((a: any, b: any) => b.date.getTime() - a.date.getTime()),
@@ -508,9 +558,25 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
       return matchesSearch && matchesType && matchesCategory && matchesDuration;
     });
 
-    // Sort by date ascending (1st April before 2nd April)
-    return [...filtered].sort((a, b) => a.date.getTime() - b.date.getTime());
-  }, [activeBook, transactionSearchQuery, transactionTypeFilter, transactionCategoryFilter, transactionDurationFilter]);
+    // Apply Dynamic Sorting
+    return [...filtered].sort((a, b) => {
+      let comparison = 0;
+      if (sortColumn === 'category') {
+        // Primary: Category, Secondary: Date (newest first)
+        comparison = a.category.localeCompare(b.category);
+        if (comparison === 0) {
+          comparison = b.date.getTime() - a.date.getTime();
+        }
+      } else {
+        // Primary: Date (newest first), Secondary: Category
+        comparison = b.date.getTime() - a.date.getTime();
+        if (comparison === 0) {
+          comparison = a.category.localeCompare(b.category);
+        }
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [activeBook, transactionSearchQuery, transactionTypeFilter, transactionCategoryFilter, transactionDurationFilter, sortColumn, sortDirection]);
 
   const handleCreateBook = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -689,19 +755,41 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
         // Run database update in background
         (async () => {
           try {
-            const { error } = await supabase
-              .from('entries')
-              .update({
+            const payload: any = {
                 amount: amountNum,
                 type: showForm,
                 description: description,
                 category: finalCategory || 'General',
                 mode: finalMode,
                 date: safeToISOString(dateObj)
-              })
-              .eq('id', editingTransaction.id)
-              .eq('user_id', session.user.id);
-            if (error) throw error;
+            };
+
+            try {
+              // Try with image_layout first
+              const { error } = await supabase
+                .from('entries')
+                .update({ ...payload, image_layout: imageLayout })
+                .eq('id', editingTransaction.id)
+                .eq('user_id', session.user.id);
+              
+              if (error) {
+                // Check if it's a column missing error
+                if (error.code === '42703' || error.message?.includes('column "image_layout" does not exist')) {
+                  console.warn('Supabase: column "image_layout" missing, retrying without it...');
+                  const { error: retryError } = await supabase
+                    .from('entries')
+                    .update(payload)
+                    .eq('id', editingTransaction.id)
+                    .eq('user_id', session.user.id);
+                  if (retryError) throw retryError;
+                } else {
+                  throw error;
+                }
+              }
+            } catch (err) {
+              console.error('Detailed Supabase Update Error:', err);
+              throw err;
+            }
 
             if (selectedImages.length > 0) {
               await supabase.from('attachments').delete().eq('entry_id', editingTransaction.id);
@@ -714,9 +802,10 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
               }));
               await supabase.from('attachments').insert(attachmentInserts);
             }
-          } catch (error) {
-            console.error('Error updating entry in Supabase:', error);
-            setError('Failed to sync update with server. Please check your connection.');
+          } catch (error: any) {
+            console.error('Detailed Supabase Update Error:', error);
+            const msg = error.message || 'Unknown error';
+            setError(`Failed to sync update: ${msg}. If you added decimals, please ensure your Supabase "amount" column supports them.`);
           }
         })();
       }
@@ -749,9 +838,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
         // Run database insert in background
         (async () => {
           try {
-            const { error } = await supabase
-              .from('entries')
-              .insert([{
+            const payload: any = {
                 id: newTransaction.id,
                 cashbook_id: activeBookId,
                 user_id: session.user.id,
@@ -761,8 +848,29 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                 category: newTransaction.category,
                 mode: newTransaction.mode,
                 date: safeToISOString(newTransaction.date)
-              }]);
-            if (error) throw error;
+            };
+
+            try {
+              // Try with image_layout first
+              const { error } = await supabase
+                .from('entries')
+                .insert([{ ...payload, image_layout: imageLayout }]);
+              
+              if (error) {
+                if (error.code === '42703' || error.message?.includes('column "image_layout" does not exist')) {
+                  console.warn('Supabase: column "image_layout" missing, retrying without it...');
+                  const { error: retryError } = await supabase
+                    .from('entries')
+                    .insert([payload]);
+                  if (retryError) throw retryError;
+                } else {
+                  throw error;
+                }
+              }
+            } catch (err) {
+              console.error('Detailed Supabase Insert Error:', err);
+              throw err;
+            }
 
             if (newTransaction.images && newTransaction.images.length > 0) {
               const attachmentInserts = newTransaction.images.map(url => ({
@@ -774,9 +882,9 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
               }));
               await supabase.from('attachments').insert(attachmentInserts);
             }
-          } catch (error) {
+          } catch (error: any) {
             console.error('Error creating entry in Supabase:', error);
-            setError('Failed to sync transaction with server. Please check your connection.');
+            setError(`Failed to sync transaction: ${error.message || 'Unknown error'}. Please ensure your Supabase "amount" column supports decimals.`);
             // Rollback
             setBooks(prevBooks => prevBooks.map(b => 
               b.id === activeBookId 
@@ -1130,91 +1238,187 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
     const filesToProcess = Array.from(files).slice(0, 5) as File[];
 
     setIsUploading(true);
-    setUploadingMessage('Detecting bill...');
+    setUploadingMessage('Detecting bills...');
     try {
-      for (const file of filesToProcess) {
-        await new Promise<void>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onerror = () => reject(new Error('File reading failed'));
-          reader.onloadend = async () => {
+      if (aiMode === 'merge' && filesToProcess.length > 1) {
+        setUploadingMessage('Merging and detecting bills...');
+        const imagesData: { base64: string, mimeType: string, raw: string }[] = [];
+        
+        for (const file of filesToProcess) {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          imagesData.push({
+            base64: base64.split(',')[1],
+            mimeType: file.type,
+            raw: base64
+          });
+        }
+
+        const result = await parseMultipleReceipts(imagesData.map(img => ({ base64: img.base64, mimeType: img.mimeType })));
+        
+        if (result) {
+          const newTransaction: Transaction = {
+            id: safeUUID(),
+            amount: result.amount,
+            type: result.type,
+            description: result.description,
+            category: result.category,
+            mode: 'Online',
+            date: parseAIDate(result.date),
+            images: imagesData.map(img => img.raw),
+            isAi: true,
+            imageLayout: 'merge'
+          };
+
+          // Optimistic update
+          setBooks(prev => prev.map(b => 
+            b.id === activeBookId 
+              ? { ...b, transactions: [newTransaction, ...b.transactions] }
+              : b
+          ));
+
+          if (supabase && session) {
             try {
-              const base64String = (reader.result as string).split(',')[1];
-              const result = await parseReceipt(base64String, file.type);
+              const payload: any = {
+                id: newTransaction.id,
+                cashbook_id: activeBookId,
+                user_id: session.user.id,
+                amount: newTransaction.amount,
+                type: newTransaction.type,
+                description: newTransaction.description,
+                category: newTransaction.category,
+                mode: newTransaction.mode,
+                date: safeToISOString(newTransaction.date)
+              };
+
+              // Try with image_layout first
+              const { error: entryError } = await supabase.from('entries').insert([{ ...payload, image_layout: 'merge' }]);
               
-              if (result) {
-                setUploadingMessage(`Detected ${result.category}! Syncing...`);
+              if (entryError) {
+                if (entryError.code === '42703' || entryError.message?.includes('column "image_layout" does not exist')) {
+                  const { error: retryError } = await supabase.from('entries').insert([payload]);
+                  if (retryError) throw retryError;
+                } else {
+                  throw entryError;
+                }
+              }
+
+              const aiAttachmentInserts = imagesData.map(img => ({
+                entry_id: newTransaction.id,
+                user_id: session.user.id,
+                file_url: img.raw,
+                file_name: 'ai_merged_bill',
+                file_type: 'image'
+              }));
+              const { error: attachError } = await supabase.from('ai_attachments').insert(aiAttachmentInserts);
+              if (attachError) throw attachError;
+            } catch (error: any) {
+              console.error('Error syncing merged AI entry (detailed):', error);
+              const msg = error.message || 'Unknown error';
+              setError(`Sync Error: ${msg}. Please ensure your Supabase "amount" column supports decimals.`);
+            }
+          }
+        }
+      } else {
+        let completed = 0;
+        const total = filesToProcess.length;
+        for (const file of filesToProcess) {
+          setUploadingMessage(`Detecting bill ${completed}/${total}...`);
+          await new Promise<void>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error('File reading failed'));
+            reader.onloadend = async () => {
+              try {
+                const base64String = (reader.result as string).split(',')[1];
+                const result = await parseReceipt(base64String, file.type);
                 
-                const newTransaction: Transaction = {
-                  id: safeUUID(),
-                  amount: result.amount,
-                  type: result.type,
-                  description: result.description,
-                  category: result.category,
-                  mode: 'Online',
-                  date: result.date ? new Date(result.date) : new Date(),
-                  images: [reader.result as string],
-                  isAi: true
-                };
+                if (result) {
+                  completed++;
+                  setUploadingMessage(`Detected ${result.category} (${completed}/${total})! Syncing...`);
+                  
+                  const newTransaction: Transaction = {
+                    id: safeUUID(),
+                    amount: result.amount,
+                    type: result.type,
+                    description: result.description,
+                    category: result.category,
+                    mode: 'Online',
+                    date: parseAIDate(result.date),
+                    images: [reader.result as string],
+                    isAi: true,
+                    imageLayout: 'split'
+                  };
 
-                // Optimistic update - show in UI immediately after AI detection
-                setBooks(prev => prev.map(b => 
-                  b.id === activeBookId 
-                    ? { ...b, transactions: [newTransaction, ...b.transactions] }
-                    : b
-                ));
+                  // Optimistic update
+                  setBooks(prev => prev.map(b => 
+                    b.id === activeBookId 
+                      ? { ...b, transactions: [newTransaction, ...b.transactions] }
+                      : b
+                  ));
 
-                if (supabase && session) {
-                  // Run database sync in background
-                  (async () => {
+                  if (supabase && session) {
                     try {
-                      const { error } = await supabase
-                        .from('entries')
-                        .insert([{
-                          id: newTransaction.id,
-                          cashbook_id: activeBookId,
-                          user_id: session.user.id,
-                          amount: newTransaction.amount,
-                          type: newTransaction.type,
-                          description: newTransaction.description,
-                          category: newTransaction.category,
-                          mode: newTransaction.mode,
-                          date: safeToISOString(newTransaction.date)
-                        }]);
-                      if (error) throw error;
+                      const payload: any = {
+                        id: newTransaction.id,
+                        cashbook_id: activeBookId,
+                        user_id: session.user.id,
+                        amount: newTransaction.amount,
+                        type: newTransaction.type,
+                        description: newTransaction.description,
+                        category: newTransaction.category,
+                        mode: newTransaction.mode,
+                        date: safeToISOString(newTransaction.date)
+                      };
 
-                      // Handle AI attachments
+                      // Try with image_layout first
+                      const { error: entryError } = await supabase.from('entries').insert([{ ...payload, image_layout: 'split' }]);
+                      
+                      if (entryError) {
+                        if (entryError.code === '42703' || entryError.message?.includes('column "image_layout" does not exist')) {
+                          const { error: retryError } = await supabase.from('entries').insert([payload]);
+                          if (retryError) throw retryError;
+                        } else {
+                          throw entryError;
+                        }
+                      }
+
                       if (newTransaction.images && newTransaction.images.length > 0) {
                         const aiAttachmentInserts = newTransaction.images.map(url => ({
                           entry_id: newTransaction.id,
                           user_id: session.user.id,
                           file_url: url,
                           file_name: 'ai_detected_bill',
-                          file_type: 'image',
-                          raw_ai_data: result
+                          file_type: 'image'
                         }));
-                        await supabase.from('ai_attachments').insert(aiAttachmentInserts);
+                        const { error: attachError } = await supabase.from('ai_attachments').insert(aiAttachmentInserts);
+                        if (attachError) throw attachError;
                       }
-                    } catch (error) {
-                      console.error('Error syncing AI entry to Supabase:', error);
-                      setError('AI entry detected but failed to sync with server.');
-                      // Rollback
+                    } catch (error: any) {
+                      console.error('Error syncing AI entry:', error);
+                      const msg = error.message || 'Unknown error';
+                      setError(`AI Sync Error: ${msg}. Your Supabase "amount" column likely needs to be changed to DECIMAL.`);
+                      // Rollback local state on failure
                       setBooks(prev => prev.map(b => 
                         b.id === activeBookId 
                           ? { ...b, transactions: b.transactions.filter(t => t.id !== newTransaction.id) }
                           : b
                       ));
                     }
-                  })();
+                  }
                 }
+                resolve();
+              } catch (err) {
+                console.error('Error in file processing callback:', err);
+                reject(err);
               }
-              resolve();
-            } catch (err) {
-              console.error('Error in file processing callback:', err);
-              reject(err);
-            }
-          };
-          reader.readAsDataURL(file);
-        });
+            };
+            reader.readAsDataURL(file);
+          });
+        }
       }
       setIsUploading(false);
       setShowDropZone(false);
@@ -1277,13 +1481,6 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
             
             {/* Left: Logo */}
             <div className="flex items-center gap-2 shrink-0 font-outfit">
-              <motion.div
-                animate={{ rotate: [0, 10, -10, 0] }}
-                transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
-                className="hidden xs:block"
-              >
-                <img src="/icon.svg" alt="Logo" className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg shadow-sm" referrerPolicy="no-referrer" />
-              </motion.div>
               <div className="flex items-center gap-1 leading-none">
                 <span className="font-black text-indigo-600 dark:text-indigo-400 text-sm sm:text-base tracking-tight">Track</span>
                 <span className={cn(
@@ -1831,22 +2028,24 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     Press <kbd className="bg-slate-700 px-1 rounded">C</kbd> + <kbd className="bg-slate-700 px-1 rounded">O</kbd>
                   </span>
                 </button>
-                <button
-                  onClick={() => { vibrate(); setShowAiWarning(true); }}
-                  disabled={isUploading}
-                  className={cn(
-                    "group/shortcut relative flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
-                    theme === 'dark' 
-                      ? "bg-indigo-900/20 text-indigo-400 hover:bg-indigo-900/40" 
-                      : "bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shadow-sm shadow-indigo-100/20"
-                  )}
-                >
-                  {isUploading ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
-                  AI Upload
-                  <span className="hidden lg:group-hover/shortcut:flex absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg whitespace-nowrap items-center gap-1 z-50">
-                    Press <kbd className="bg-slate-700 px-1 rounded">A</kbd> + <kbd className="bg-slate-700 px-1 rounded">U</kbd>
-                  </span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                  <button
+                    onClick={() => { vibrate(); setShowAiWarning(true); }}
+                    disabled={isUploading}
+                    className={cn(
+                      "group/shortcut relative flex-1 sm:flex-none flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold transition-all active:scale-95",
+                      theme === 'dark' 
+                        ? "bg-indigo-900/20 text-indigo-400 hover:bg-indigo-900/40" 
+                        : "bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shadow-sm shadow-indigo-100/20"
+                    )}
+                  >
+                    {isUploading ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
+                    AI Upload
+                    <span className="hidden lg:group-hover/shortcut:flex absolute -bottom-8 left-1/2 -translate-x-1/2 px-2 py-1 bg-slate-800 text-white text-[10px] rounded shadow-lg whitespace-nowrap items-center gap-1 z-50">
+                      Press <kbd className="bg-slate-700 px-1 rounded">A</kbd> + <kbd className="bg-slate-700 px-1 rounded">U</kbd>
+                    </span>
+                  </button>
+                </div>
               </div>
 
               {/* Filters & Search Row */}
@@ -2057,14 +2256,6 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                     : (theme === 'dark' ? "bg-zinc-950 border-zinc-900" : "bg-white border-slate-100")
                                 )}
                               >
-                                {t.isAi && (
-                                  <div className="absolute top-0 right-0">
-                                    <div className="bg-amber-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-sm">
-                                      <Sparkles size={6} />
-                                      AI
-                                    </div>
-                                  </div>
-                                )}
                                 <div className="flex justify-between items-start mb-1.5">
                                   <div className="flex flex-wrap gap-1">
                                     <span className={cn(
@@ -2096,13 +2287,29 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                   </div>
                                 </div>
 
-                                <div className="mb-1.5">
+                                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                                   <p className={cn(
                                     "text-[11px] font-bold line-clamp-1 transition-colors duration-300",
                                     theme === 'dark' ? "text-slate-100" : "text-black"
                                   )}>
                                     {t.description || 'No details provided'}
                                   </p>
+                                   {t.isAi && (
+                                    <div className="bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 text-[8px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shadow-sm">
+                                      <Sparkles size={8} />
+                                      AI
+                                    </div>
+                                  )}
+                                  {t.imageLayout && (
+                                    <div className={cn(
+                                      "text-[8px] font-black px-1.5 py-0.5 rounded-md shadow-sm uppercase",
+                                      t.imageLayout === 'merge' 
+                                        ? (theme === 'dark' ? "bg-indigo-900/30 text-indigo-400" : "bg-indigo-50 text-indigo-600")
+                                        : (theme === 'dark' ? "bg-slate-800 text-slate-400" : "bg-slate-50 text-slate-600")
+                                    )}>
+                                      {t.imageLayout}
+                                    </div>
+                                  )}
                                 </div>
 
                                 <div className={cn(
@@ -2210,9 +2417,25 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                 {selectedTransactions.size === filteredTransactions.length && filteredTransactions.length > 0 && <CheckSquare size={14} />}
                               </button>
                             </th>
-                            <th className="px-6 py-4">Date & Time</th>
+                             <th className="px-6 py-4">
+                               <div className="flex items-center gap-2">
+                                 Date & Time
+                               </div>
+                             </th>
                             <th className="px-6 py-4">Details</th>
-                            <th className="px-6 py-4">Category</th>
+                            <th 
+                              className="px-6 py-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                              onClick={() => toggleSort('category')}
+                            >
+                              <div className="flex items-center gap-2">
+                                Category
+                                {sortColumn === 'category' ? (
+                                  <ArrowUp size={12} className={cn("transition-transform duration-200", sortDirection === 'desc' ? "rotate-180" : "")} />
+                                ) : (
+                                  <ArrowUpDown size={12} className="text-slate-300 dark:text-slate-700" />
+                                )}
+                              </div>
+                            </th>
                             <th className="px-6 py-4">Mode</th>
                             <th className="px-6 py-4">Bill</th>
                             <th className="px-6 py-4 text-right">Amount</th>
@@ -2293,6 +2516,16 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                         )}>
                                           <Sparkles size={10} />
                                           AI
+                                        </span>
+                                      )}
+                                      {t.imageLayout && (
+                                        <span className={cn(
+                                          "px-1.5 py-0.5 text-[9px] font-black rounded-full border uppercase",
+                                          t.imageLayout === 'merge'
+                                            ? (theme === 'dark' ? "bg-indigo-900/40 text-indigo-400 border-indigo-800" : "bg-indigo-50 text-indigo-600 border-indigo-200")
+                                            : (theme === 'dark' ? "bg-slate-800 text-slate-400 border-slate-700" : "bg-slate-50 text-slate-500 border-slate-200")
+                                        )}>
+                                          {t.imageLayout}
                                         </span>
                                       )}
                                     </div>
@@ -2875,32 +3108,34 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
 
               <div className="p-4 sm:p-6 space-y-4 sm:space-y-6 max-h-[80vh] overflow-y-auto no-scrollbar">
                 {/* Type Tabs */}
-                <div className={cn(
-                  "p-1 rounded-xl flex gap-1 transition-colors duration-300",
-                  theme === 'dark' ? "bg-slate-800" : "bg-slate-100"
-                )}>
-                  <button
-                    onClick={() => setShowForm('in')}
-                    className={cn(
-                      "flex-1 py-2 sm:py-3 rounded-lg font-bold transition-all text-xs sm:text-sm",
-                      showForm === 'in' 
-                        ? (theme === 'dark' ? "bg-slate-700 text-emerald-400 shadow-sm" : "bg-white text-emerald-600 shadow-sm")
-                        : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
-                    )}
-                  >
-                    CASH IN
-                  </button>
-                  <button
-                    onClick={() => setShowForm('out')}
-                    className={cn(
-                      "flex-1 py-2 sm:py-3 rounded-lg font-bold transition-all text-xs sm:text-sm",
-                      showForm === 'out' 
-                        ? (theme === 'dark' ? "bg-slate-700 text-rose-400 shadow-sm" : "bg-white text-rose-600 shadow-sm")
-                        : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
-                    )}
-                  >
-                    CASH OUT
-                  </button>
+                <div className="flex flex-col gap-4">
+                  <div className={cn(
+                    "p-1 rounded-xl flex gap-1 transition-colors duration-300",
+                    theme === 'dark' ? "bg-slate-800" : "bg-slate-100"
+                  )}>
+                    <button
+                      onClick={() => setShowForm('in')}
+                      className={cn(
+                        "flex-1 py-2 sm:py-3 rounded-lg font-bold transition-all text-xs sm:text-sm",
+                        showForm === 'in' 
+                          ? (theme === 'dark' ? "bg-slate-700 text-emerald-400 shadow-sm" : "bg-white text-emerald-600 shadow-sm")
+                          : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
+                      )}
+                    >
+                      CASH IN
+                    </button>
+                    <button
+                      onClick={() => setShowForm('out')}
+                      className={cn(
+                        "flex-1 py-2 sm:py-3 rounded-lg font-bold transition-all text-xs sm:text-sm",
+                        showForm === 'out' 
+                          ? (theme === 'dark' ? "bg-slate-700 text-rose-400 shadow-sm" : "bg-white text-rose-600 shadow-sm")
+                          : (theme === 'dark' ? "text-slate-400 hover:bg-slate-700/50" : "text-slate-500 hover:bg-slate-200/50")
+                      )}
+                    >
+                      CASH OUT
+                    </button>
+                  </div>
                 </div>
 
                 <form onSubmit={handleAddTransaction} className="space-y-4 sm:space-y-6">
@@ -2923,6 +3158,8 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                       <input
                         autoFocus
                         type="number"
+                        step="any"
+                        min="0"
                         required
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
