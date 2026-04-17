@@ -169,8 +169,7 @@ export default function Auth({
         )}
       >
         <div className="text-center mb-4">
-          <div className="flex flex-col items-center justify-center gap-2 mb-2 font-outfit">
-            <img src="/icon.svg" alt="TrackBook Logo" className="w-12 h-12 rounded-xl shadow-sm" referrerPolicy="no-referrer" />
+          <div className="flex flex-col items-center justify-center mb-2 font-outfit">
             <div className="flex items-center gap-1.5">
               <span className="text-[24px] font-black text-[#3b82f6] dark:text-blue-400 tracking-tight">Track</span>
               <span className={cn(
