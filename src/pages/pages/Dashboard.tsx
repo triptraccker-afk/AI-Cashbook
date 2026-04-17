@@ -1477,7 +1477,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
           "border-b sticky top-0 z-50 px-4 h-14 sm:h-16 transition-colors duration-300",
           theme === 'dark' ? "bg-black border-zinc-900" : "bg-white border-slate-100"
         )}>
-          <div className="max-w-6xl mx-auto h-full flex items-center justify-between gap-2 sm:gap-4">
+          <div className="max-w-[98%] mx-auto h-full flex items-center justify-between gap-2 sm:gap-4">
             
             {/* Left: Logo */}
             <div className="flex items-center gap-2 shrink-0 font-outfit">
@@ -1640,7 +1640,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
       )}
 
       {/* Main Content Area */}
-      <main className="max-w-6xl mx-auto p-4 sm:p-6">
+      <main className="w-full mx-auto p-2 sm:p-4 lg:p-6 lg:px-6 xl:px-10">
         <AnimatePresence mode="wait">
           {!activeBookId ? (
             /* PAGE 1: HOME / BOOKS LIST */
@@ -1762,7 +1762,9 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
               ) : (
                 <div className={cn(
                   "grid gap-2 sm:gap-6",
-                  viewMode === 'grid' ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-1"
+                  viewMode === 'grid' 
+                    ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5" 
+                    : "grid-cols-1"
                 )}>
                   {filteredBooks.map((book) => (
                     <motion.div
@@ -1841,7 +1843,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="max-w-6xl mx-auto space-y-4 sm:space-y-6 pb-24 sm:pb-0"
+              className="w-full space-y-4 sm:space-y-6 pb-24 sm:pb-0"
             >
               {/* Header Actions */}
               <div className="flex items-center justify-between">
@@ -1914,7 +1916,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     <p className={cn(
                       "font-black transition-colors duration-300",
                       theme === 'dark' ? "text-slate-100" : "text-black",
-                      formatCurrency(totals.net).length > 12 ? "text-lg" : "text-xl"
+                      "text-lg"
                     )}>
                       {formatCurrency(totals.net)}
                     </p>
@@ -1931,7 +1933,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                       )}>Total In (+)</p>
                       <p className={cn(
                         "font-black text-emerald-600",
-                        formatCurrency(totals.in).length > 12 ? "text-xs" : "text-sm"
+                        "text-xs"
                       )}>{formatCurrency(totals.in)}</p>
                     </div>
                     <div className="flex items-center justify-between">
@@ -1941,7 +1943,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                       )}>Total Out (-)</p>
                       <p className={cn(
                         "font-black text-rose-600",
-                        formatCurrency(totals.out).length > 12 ? "text-xs" : "text-sm"
+                        "text-xs"
                       )}>{formatCurrency(totals.out)}</p>
                     </div>
                   </div>
@@ -2138,7 +2140,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     )}>Cash In</p>
                     <p className={cn(
                       "font-black text-emerald-600 dark:text-emerald-400",
-                      formatCurrency(totals.in).length > 10 ? "text-xl" : "text-3xl"
+                      "text-xl"
                     )}>
                       {formatCurrency(totals.in)}
                     </p>
@@ -2162,7 +2164,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     )}>Cash Out</p>
                     <p className={cn(
                       "font-black text-rose-600 dark:text-rose-400",
-                      formatCurrency(totals.out).length > 10 ? "text-xl" : "text-3xl"
+                      "text-xl"
                     )}>
                       {formatCurrency(totals.out)}
                     </p>
@@ -2186,7 +2188,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     )}>Net Balance</p>
                     <p className={cn(
                       "font-black text-indigo-600 dark:text-indigo-400",
-                      formatCurrency(totals.net).length > 10 ? "text-xl" : "text-3xl"
+                      "text-xl"
                     )}>
                       {formatCurrency(totals.net)}
                     </p>
@@ -2394,17 +2396,17 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                   </div>
 
                   <div className={cn(
-                    "rounded-3xl border overflow-hidden shadow-sm transition-colors duration-300",
+                    "rounded-3xl border shadow-sm transition-colors duration-300",
                     theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-100"
                   )}>
-                    <div className="overflow-x-auto">
+                    <div className="w-full">
                       <table className="w-full text-left">
                         <thead>
                           <tr className={cn(
                             "text-xs font-bold uppercase tracking-wider transition-colors duration-300",
                             theme === 'dark' ? "bg-slate-800/50 text-slate-300" : "bg-slate-50 text-slate-400"
                           )}>
-                            <th className="px-6 py-4 w-12">
+                            <th className="px-3 sm:px-6 py-4 w-12">
                               <button 
                                 onClick={toggleSelectAll}
                                 className={cn(
@@ -2417,14 +2419,14 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                 {selectedTransactions.size === filteredTransactions.length && filteredTransactions.length > 0 && <CheckSquare size={14} />}
                               </button>
                             </th>
-                             <th className="px-6 py-4">
+                             <th className="px-3 sm:px-6 py-4">
                                <div className="flex items-center gap-2">
                                  Date & Time
                                </div>
                              </th>
-                            <th className="px-6 py-4">Details</th>
+                            <th className="px-3 sm:px-6 py-4">Details</th>
                             <th 
-                              className="px-6 py-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                              className="px-3 sm:px-6 py-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
                               onClick={() => toggleSort('category')}
                             >
                               <div className="flex items-center gap-2">
@@ -2436,11 +2438,11 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                 )}
                               </div>
                             </th>
-                            <th className="px-6 py-4">Mode</th>
-                            <th className="px-6 py-4">Bill</th>
-                            <th className="px-6 py-4 text-right">Amount</th>
-                            <th className="px-6 py-4 text-right">Balance</th>
-                            <th className="px-6 py-4 text-center">Actions</th>
+                            <th className="px-3 sm:px-6 py-4">Mode</th>
+                            <th className="px-3 sm:px-6 py-4">Bill</th>
+                            <th className="px-3 sm:px-6 py-4 text-right">Amount</th>
+                            <th className="px-3 sm:px-6 py-4 text-right">Balance</th>
+                            <th className="px-3 sm:px-6 py-4 text-center">Actions</th>
                           </tr>
                         </thead>
                         <tbody className={cn(
@@ -2476,7 +2478,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                   theme === 'dark' ? "hover:bg-slate-800/30" : "hover:bg-slate-50/50",
                                   selectedTransactions.has(t.id) && (theme === 'dark' ? "bg-indigo-900/10" : "bg-indigo-50/50")
                                 )}>
-                                  <td className="px-6 py-4">
+                                  <td className="px-3 sm:px-6 py-4">
                                     <button 
                                       onClick={() => toggleSelectTransaction(t.id)}
                                       className={cn(
@@ -2489,7 +2491,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                       {selectedTransactions.has(t.id) && <CheckSquare size={14} />}
                                     </button>
                                   </td>
-                                  <td className="px-6 py-4 whitespace-nowrap">
+                                  <td className="px-3 sm:px-6 py-4 whitespace-nowrap">
                                     <p className={cn(
                                       "font-bold text-sm",
                                       theme === 'dark' ? "text-slate-200" : "text-slate-800"
@@ -2503,7 +2505,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                       {t.date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
                                     </p>
                                   </td>
-                                  <td className="px-6 py-4">
+                                  <td className="px-3 sm:px-6 py-4 min-w-[120px]">
                                     <div className="flex items-center gap-2">
                                       <p className={cn(
                                         "text-sm font-bold transition-colors duration-300",
@@ -2530,19 +2532,19 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                       )}
                                     </div>
                                   </td>
-                                  <td className="px-6 py-4">
+                                  <td className="px-3 sm:px-6 py-4 whitespace-nowrap">
                                     <p className={cn(
                                       "text-sm font-bold transition-colors duration-300",
                                       theme === 'dark' ? "text-slate-300" : "text-black"
                                     )}>{t.category}</p>
                                   </td>
-                                  <td className="px-6 py-4">
+                                  <td className="px-3 sm:px-6 py-4 whitespace-nowrap">
                                     <p className={cn(
                                       "text-sm font-bold transition-colors duration-300",
                                       theme === 'dark' ? "text-slate-300" : "text-black"
                                     )}>{t.mode}</p>
                                   </td>
-                                  <td className="px-6 py-4">
+                                  <td className="px-3 sm:px-6 py-4 whitespace-nowrap">
                                     {t.images && t.images.length > 0 ? (
                                       <button 
                                         onClick={() => {
@@ -2562,20 +2564,20 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                                     ) : null}
                                   </td>
                                   <td className={cn(
-                                    "px-6 py-4 text-right font-black",
+                                    "px-3 sm:px-6 py-4 text-right font-black whitespace-nowrap tabular-nums",
                                     t.type === 'in' ? "text-emerald-600" : "text-rose-600",
-                                    formatCurrency(t.amount).length > 10 ? "text-xs" : "text-sm"
+                                    "text-xs sm:text-sm"
                                   )}>
                                     {formatCurrency(t.amount)}
                                   </td>
                                   <td className={cn(
-                                    "px-6 py-4 text-right font-black transition-colors duration-300",
+                                    "px-3 sm:px-6 py-4 text-right font-black transition-colors duration-300 whitespace-nowrap tabular-nums",
                                     theme === 'dark' ? "text-slate-100" : "text-black",
-                                    formatCurrency(runningBalance).length > 10 ? "text-xs" : "text-sm"
+                                    "text-xs sm:text-sm"
                                   )}>
                                     <span>{formatCurrency(runningBalance)}</span>
                                   </td>
-                                  <td className="px-6 py-4">
+                                  <td className="px-3 sm:px-6 py-4">
                                     <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                       <button 
                                         onClick={() => handleEditTransaction(t)}
