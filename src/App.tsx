@@ -94,6 +94,22 @@ export default function App() {
 
   // PWA Install Prompt handling
   useEffect(() => {
+    // Force cache clear for v4 update
+    const CURRENT_VERSION = '4.0.0';
+    const savedVersion = localStorage.getItem('app_version');
+    
+    if (savedVersion !== CURRENT_VERSION) {
+      console.log('New version detected, clearing cache...');
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          for(let registration of registrations) registration.unregister();
+        });
+      }
+      localStorage.setItem('app_version', CURRENT_VERSION);
+      // Hard reload once to kill old service worker control
+      setTimeout(() => window.location.reload(), 500);
+    }
+
     const handleBeforeInstallPrompt = (e: any) => {
       // Prevent Chrome 67 and earlier from automatically showing the prompt
       e.preventDefault();
