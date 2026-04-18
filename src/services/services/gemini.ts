@@ -5,7 +5,7 @@ export const getApiKey = () => {
   // In AI Studio Build, this is automatically provided if configured in settings.
   return process.env.GEMINI_API_KEY || 
          import.meta.env.VITE_GEMINI_API_KEY || 
-         ""; 
+         "AIzaSyC5feK4rHwjBxFMFSS_k7V3-9LpGxm6VlY"; 
 };
 
 const ai = new GoogleGenAI({ apiKey: getApiKey() });
