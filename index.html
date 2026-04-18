@@ -21,7 +21,7 @@
               <div style="background: white; padding: 30px; border-radius: 20px; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 320px;">
                 <h2 style="margin: 0 0 10px 0; color: #1e293b; font-size: 18px;">Loading taking too long?</h2>
                 <p style="margin: 0 0 20px 0; color: #64748b; font-size: 14px;">If you see a blank screen, there might be a connection issue or old data stuck in your browser.</p>
-                <button onclick="window.location.reload(true)" style="width: 100%; padding: 12px; background: #3b82f6; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin-bottom: 10px;">Try Refreshing</button>
+                <button onclick="window.location.reload()" style="width: 100%; padding: 12px; background: #3b82f6; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin-bottom: 10px;">Try Refreshing</button>
                 <button onclick="clearAppCache()" style="width: 100%; padding: 12px; background: white; color: #ef4444; border: 1px solid #fecaca; border-radius: 12px; font-weight: bold; cursor: pointer;">Clear Local Data</button>
               </div>
             </div>
@@ -39,7 +39,7 @@
         caches.keys().then(names => {
           for (let name of names) caches.delete(name);
         });
-        window.location.reload(true);
+        window.location.reload();
       }
     </script>
     <script type="module" src="/src/main.tsx"></script>
