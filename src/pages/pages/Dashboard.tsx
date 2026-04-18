@@ -331,6 +331,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const multiFileInputRef = useRef<HTMLInputElement>(null);
+  const abortUploadRef = useRef(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const reportsRef = useRef<HTMLDivElement>(null);
 
@@ -1238,6 +1239,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
     const filesToProcess = Array.from(files).slice(0, 5) as File[];
 
     setIsUploading(true);
+    abortUploadRef.current = false;
     setUploadingMessage('Detecting bills...');
     try {
       if (aiMode === 'merge' && filesToProcess.length > 1) {
@@ -1245,6 +1247,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
         const imagesData: { base64: string, mimeType: string, raw: string }[] = [];
         
         for (const file of filesToProcess) {
+          if (abortUploadRef.current) return;
           const base64 = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
@@ -1258,9 +1261,10 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
           });
         }
 
+        if (abortUploadRef.current) return;
         const result = await parseMultipleReceipts(imagesData.map(img => ({ base64: img.base64, mimeType: img.mimeType })));
         
-        if (result) {
+        if (result && !abortUploadRef.current) {
           const newTransaction: Transaction = {
             id: safeUUID(),
             amount: result.amount,
@@ -1327,16 +1331,21 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
         let completed = 0;
         const total = filesToProcess.length;
         for (const file of filesToProcess) {
+          if (abortUploadRef.current) return;
           setUploadingMessage(`Detecting bill ${completed}/${total}...`);
           await new Promise<void>((resolve, reject) => {
             const reader = new FileReader();
             reader.onerror = () => reject(new Error('File reading failed'));
             reader.onloadend = async () => {
               try {
+                if (abortUploadRef.current) {
+                  resolve();
+                  return;
+                }
                 const base64String = (reader.result as string).split(',')[1];
                 const result = await parseReceipt(base64String, file.type);
                 
-                if (result) {
+                if (result && !abortUploadRef.current) {
                   completed++;
                   setUploadingMessage(`Detected ${result.category} (${completed}/${total})! Syncing...`);
                   
@@ -3454,15 +3463,15 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[200] flex items-center justify-center bg-indigo-600 text-white"
           >
-            <div className="text-center space-y-6 px-6">
+            <div className="text-center space-y-8 px-6 w-full max-w-sm">
               <div className="relative flex items-center justify-center">
                 <motion.div
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                   className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full"
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <AnimatePresence mode="wait">
                   <motion.h3 
                     key={uploadingMessage}
@@ -3474,9 +3483,24 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                     {uploadingMessage}
                   </motion.h3>
                 </AnimatePresence>
-                <p className="text-indigo-100/80 text-sm max-w-[280px] mx-auto">
+                <p className="text-indigo-100/80 text-sm">
                   AI is reading your receipt and extracting details
                 </p>
+              </div>
+
+              <div className="pt-4">
+                <button 
+                  onClick={() => {
+                    abortUploadRef.current = true;
+                    setIsUploading(false);
+                    setUploadingMessage('');
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                  className="px-8 py-3 bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl font-bold flex items-center justify-center gap-2 mx-auto transition-all active:scale-95"
+                >
+                  <ChevronLeft size={18} />
+                  Back to Dashboard
+                </button>
               </div>
             </div>
           </motion.div>
