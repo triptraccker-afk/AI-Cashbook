@@ -406,13 +406,21 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
   // Fetch data from Supabase
   useEffect(() => {
     const fetchData = async () => {
+      // Safety timeout to ensure loading state clears even if query hangs
+      const fetchTimeout = setTimeout(() => {
+        console.warn('Data fetching taking too long, clearing loading state...');
+        setIsLoading(false);
+      }, 8000);
+
       if (!session) {
+        clearTimeout(fetchTimeout);
         setBooks([]);
         setIsLoading(false);
         return;
       }
 
       if (!supabase) {
+        clearTimeout(fetchTimeout);
         // Load from localStorage if Supabase is not configured
         const savedBooks = localStorage.getItem(`cashbooks_${session.user.id}`);
         if (savedBooks) {
@@ -441,6 +449,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
           .eq('user_id', session.user.id);
 
         if (cbError) throw cbError;
+        clearTimeout(fetchTimeout);
 
         if (cashbooks) {
           setBooks(cashbooks.map((cb: any) => ({
@@ -462,6 +471,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
           })));
         }
       } catch (error: any) {
+        clearTimeout(fetchTimeout);
         console.error('Error fetching data from Supabase:', error);
         setError(error.message || 'Failed to fetch data');
       } finally {
@@ -640,6 +650,31 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
     setBooks(books.map(b => b.id === isEditingBook ? { ...b, name: editBookName } : b));
     setIsEditingBook(null);
     setEditBookName('');
+  };
+
+  const handleUpdateProfile = async () => {
+    if (!session || !supabase) {
+      setIsEditingName(false);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmittingMessage('Updating profile...');
+    
+    try {
+      const { error } = await supabase.auth.updateUser({
+        data: { full_name: userName }
+      });
+      
+      if (error) throw error;
+      
+    } catch (err: any) {
+      console.error('Error updating profile:', err);
+      setError(err.message || 'Failed to update profile');
+    } finally {
+      setIsSubmitting(false);
+      setIsEditingName(false);
+    }
   };
 
   const handleAskAi = async () => {
@@ -3068,7 +3103,7 @@ export default function Dashboard({ session, theme, setTheme }: { session: any, 
                   />
                 </div>
                 <button
-                  onClick={() => setIsEditingName(false)}
+                  onClick={handleUpdateProfile}
                   className={cn(
                     "w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition-all",
                     theme === 'dark' ? "shadow-none" : "shadow-lg shadow-indigo-100"
