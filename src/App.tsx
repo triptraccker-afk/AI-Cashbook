@@ -25,8 +25,14 @@ function NavigationHandler({
       return;
     }
 
-    // Get initial session
+    // Get initial session with timeout safety
+    const sessionTimeout = setTimeout(() => {
+      console.warn('Auth session lookup taking too long, forcing load completion...');
+      setLoading(false);
+    }, 5000); // 5 second safety net
+
     supabase.auth.getSession().then(({ data: { session } }) => {
+      clearTimeout(sessionTimeout);
       setSession(session);
       setLoading(false);
       
@@ -37,6 +43,10 @@ function NavigationHandler({
           navigate('/resetpassword' + hash, { replace: true });
         }
       }
+    }).catch(err => {
+      console.error('Auth session lookup failed:', err);
+      clearTimeout(sessionTimeout);
+      setLoading(false);
     });
 
     // Listen for auth changes
@@ -118,9 +128,15 @@ export default function App() {
             session ? (
               <Dashboard session={session} theme={theme} setTheme={setTheme} />
             ) : (
-              // If we are still loading initial session, we might want to show nothing or a very minimal spinner
-              // but the user wants to remove the "Loading Track Book" screen entirely.
-              loading ? null : <Navigate to="/login" replace />
+              // If we are still loading initial session, show a loader
+              loading ? (
+                <div className="min-h-screen flex items-center justify-center bg-white dark:bg-black">
+                  <div className="flex flex-col items-center gap-4">
+                    <Loader2 className="animate-spin text-indigo-600" size={40} />
+                    <p className="text-sm font-medium text-slate-500 animate-pulse">Initializing app...</p>
+                  </div>
+                </div>
+              ) : <Navigate to="/login" replace />
             )
           } 
         />
