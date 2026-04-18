@@ -1,15 +1,16 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 export const getApiKey = () => {
-  // Priority: Environment Variables -> User Provided Key (Fallback)
+  // Use process.env.GEMINI_API_KEY as the primary source.
+  // In AI Studio Build, this is automatically provided if configured in settings.
   return process.env.GEMINI_API_KEY || 
          import.meta.env.VITE_GEMINI_API_KEY || 
-         "AIzaSyC5feK4rHwjBxFMFSS_k7V3-9LpGxm6VlY"; // Updated user provided fallback
+         ""; 
 };
 
 const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-async function withRetry<T>(fn: () => Promise<T>, maxRetries: number = 5, initialDelay: number = 3000): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, maxRetries: number = 2, initialDelay: number = 500): Promise<T> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -21,15 +22,23 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries: number = 5, initia
                           errorMessage.includes('RESOURCE_EXHAUSTED') || 
                           error?.status === 429;
       
+      const isApiKeyError = errorMessage.includes('API_KEY_INVALID') || 
+                            errorMessage.includes('403') || 
+                            errorMessage.includes('unauthorized');
+
+      if (isApiKeyError) {
+        throw new Error("Invalid Gemini API Key.");
+      }
+      
       if (isRateLimit && i < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, i);
-        console.warn(`Gemini API rate limit reached. Retrying in ${delay}ms... (Attempt ${i + 1}/${maxRetries})`);
+        console.warn(`Retrying Gemini in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       
       if (isRateLimit) {
-        throw new Error("AI service is currently busy (Rate Limit). Please try again in a few seconds.");
+        throw new Error("AI service busy. Try again.");
       }
       throw error;
     }
@@ -42,44 +51,30 @@ export interface TransactionData {
   type: 'in' | 'out';
   description: string;
   category: string;
-  date?: string; // ISO date string or similar
-  time?: string; // HH:mm format
+  date?: string; 
+  time?: string; 
 }
 
 export async function parseReceipt(base64Image: string, mimeType: string): Promise<TransactionData | null> {
   try {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("API Key missing");
+
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-3-flash-preview",
       contents: [
         {
           parts: [
-            {
-              inlineData: {
-                data: base64Image,
-                mimeType: mimeType,
-              },
-            },
-            {
-              text: `Analyze this receipt or transaction image. Extract the following details accurately:
-1. Total amount (as a number).
-2. Transaction type: 'in' for income/money received, 'out' for expense/money spent.
-3. Date: DD-MM-YYYY format.
-4. Time: HH:mm format (24-hour).
-5. Category: One of [Food, Transport, Utilities, Shopping, Entertainment, Health, Education, Salary, Other].
-6. Description: A concise summary. 
+            { inlineData: { data: base64Image, mimeType: mimeType } },
+            { text: `Receipt JSON extraction. Return ONLY:
+{"amount":number,"type":"in"|"out","description":string,"category":string,"date":"DD-MM-YYYY","time":"HH:mm"}
 
-SPECIAL LOGIC:
-- If the category is 'Food', the description MUST ONLY be one of ["Breakfast", "Lunch", "Dinner"] based on the time. DO NOT include hotel or restaurant names.
-  - 06:00 to 11:59: "Breakfast"
-  - 12:00 to 18:00: "Lunch"
-  - 18:01 to 05:59: "Dinner"
-- If the vendor or service is "Uber", change the category to 'Transport' and set the description to "Taxi".
-- For other bills, include relevant details about the service or item in the description.
-
-Return the data in valid JSON format.`,
-            },
-          ],
-        },
+RULES:
+- Food: description is "Breakfast"/"Lunch"/"Dinner".
+- Uber: category "Transport", description "Taxi".
+- Categories: [Food, Transport, Utilities, Shopping, Entertainment, Health, Education, Salary, Other]` }
+          ]
+        }
       ],
       config: {
         responseMimeType: "application/json",
@@ -98,49 +93,32 @@ Return the data in valid JSON format.`,
       },
     }));
 
-    const text = response.text;
+    const text = response.text?.trim();
     if (!text) return null;
-    return JSON.parse(text) as TransactionData;
-  } catch (error) {
-    console.error("Error parsing receipt:", error);
-    return null;
+    const cleanJson = text.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+    return JSON.parse(cleanJson) as TransactionData;
+  } catch (error: any) {
+    console.error("AI Error:", error);
+    throw error;
   }
 }
 
 export async function parseMultipleReceipts(images: { base64: string, mimeType: string }[]): Promise<TransactionData | null> {
   try {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("API Key missing");
+
     const response = await withRetry(() => ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-3-flash-preview",
       contents: [
         {
           parts: [
-            ...images.map(img => ({
-              inlineData: {
-                data: img.base64,
-                mimeType: img.mimeType,
-              },
-            })),
-            {
-              text: `Analyze these multiple receipt or transaction images. Combine them into a SINGLE transaction summary.
-1. Total amount: Sum of all amounts found in all images.
-2. Transaction type: 'in' for income, 'out' for expense. If mixed, default to 'out'.
-3. Date: Use the most recent date found in DD-MM-YYYY format.
-4. Time: Use the most recent time found in HH:mm format (24-hour).
-5. Category: Choose the most appropriate category for the combined set.
-6. Description: A concise summary of all items combined.
-
-SPECIAL LOGIC:
-- If the category is 'Food', the description MUST ONLY be one of ["Breakfast", "Lunch", "Dinner"] based on the time. DO NOT include hotel or restaurant names.
-  - 06:00 to 11:59: "Breakfast"
-  - 12:00 to 18:00: "Lunch"
-  - 18:01 to 05:59: "Dinner"
-- If any vendor or service is "Uber", change the category to 'Transport' and set the description to "Taxi".
-- For other bills, include relevant details about the service or item in the description.
-
-Return the data in valid JSON format.`,
-            },
-          ],
-        },
+            ...images.map(img => ({ inlineData: { data: img.base64, mimeType: img.mimeType } })),
+            { text: `Receipts summary JSON. Return ONLY:
+{"amount":number (sum),"type":"in"|"out","description":string,"category":string,"date":"DD-MM-YYYY","time":"HH:mm"}
+Categories: [Food, Transport, Utilities, Shopping, Entertainment, Health, Education, Salary, Other]` }
+          ]
+        }
       ],
       config: {
         responseMimeType: "application/json",
@@ -159,11 +137,12 @@ Return the data in valid JSON format.`,
       },
     }));
 
-    const text = response.text;
+    const text = response.text?.trim();
     if (!text) return null;
-    return JSON.parse(text) as TransactionData;
+    const cleanJson = text.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+    return JSON.parse(cleanJson) as TransactionData;
   } catch (error) {
-    console.error("Error parsing multiple receipts:", error);
-    return null;
+    console.error("AI Error:", error);
+    throw error;
   }
 }
